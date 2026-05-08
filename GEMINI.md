@@ -56,3 +56,14 @@ To maximize the throughput of the RTX 4060 Ti during self-play, the C++ engine w
 
 ### Phase 5: Match Server Integration
 - **Server Client**: Build the `engine.py` wrapper using `gomoku_match.PlayerClient` to compete on the server.
+
+## 5. Building and Testing
+
+To build the C++ engine and run its unit tests (which require a system installation of `googletest`), run:
+
+```bash
+mkdir -p build && cd build
+cmake -DCMAKE_BUILD_TYPE=Release ../engine
+make -j$(nproc)
+./engine_tests
+```
