@@ -1,12 +1,20 @@
 #pragma once
+#include <torch/torch.h>
+
 #include <memory>
 #include <vector>
-
-#include <torch/torch.h>
 
 #include "batch_inference_executor.h"
 #include "board.h"
 #include "evaluator.h"
+
+namespace neural_net_evaluator_internal {
+// Encodes one board into a [kNumInputChannels, kBoardSize, kBoardSize]
+// float32 CPU tensor. Exposed for unit tests to verify encoding correctness
+// without needing a real model.
+torch::Tensor BoardToTensor(const Board& board);
+
+}  // namespace neural_net_evaluator_internal
 
 // NeuralNetEvaluator is the Evaluator adapter that bridges game semantics
 // (Board, EvaluationResult) and the low-level BatchInferenceExecutor.
@@ -30,17 +38,11 @@ class NeuralNetEvaluator : public Evaluator {
  public:
   static constexpr int kNumInputChannels = 4;
 
-  explicit NeuralNetEvaluator(
-      std::shared_ptr<BatchInferenceExecutor> executor);
+  explicit NeuralNetEvaluator(std::shared_ptr<BatchInferenceExecutor> executor);
 
   // Encodes the board, submits to the executor, blocks until the batch is
   // processed, decodes the result, and returns an EvaluationResult.
   EvaluationResult Evaluate(const Board& board) override;
-
-  // Encodes one board into a [kNumInputChannels, kBoardSize, kBoardSize]
-  // float32 CPU tensor. Public so unit tests can verify encoding correctness
-  // without needing a real model.
-  static torch::Tensor BoardToTensor(const Board& board);
 
  private:
   std::shared_ptr<BatchInferenceExecutor> executor_;

@@ -2,7 +2,7 @@
 
 #include <limits>
 
-namespace {
+namespace neural_net_evaluator_internal {
 
 // ---------------------------------------------------------------------------
 // BoardToTensorImpl
@@ -11,14 +11,13 @@ namespace {
 // float32 CPU tensor. Not a class member because it has no dependency on
 // NeuralNetEvaluator instance state.
 // ---------------------------------------------------------------------------
-torch::Tensor BoardToTensorImpl(const Board& board) {
+torch::Tensor BoardToTensor(const Board& board) {
   auto t = torch::zeros(
       {NeuralNetEvaluator::kNumInputChannels, Board::kSize, Board::kSize});
   auto acc = t.accessor<float, 3>();
 
   const Player cur = board.stone_to_place();
-  const Player opp =
-      (cur == Player::kBlack) ? Player::kWhite : Player::kBlack;
+  const Player opp = (cur == Player::kBlack) ? Player::kWhite : Player::kBlack;
   const float ch2_fill = (cur == Player::kBlack) ? 1.0f : 0.0f;
   const float ch3_fill = (cur == Player::kWhite) ? 1.0f : 0.0f;
 
@@ -33,6 +32,10 @@ torch::Tensor BoardToTensorImpl(const Board& board) {
   }
   return t;
 }
+
+}  // namespace neural_net_evaluator_internal
+
+namespace {
 
 // ---------------------------------------------------------------------------
 // DecodeOutput
@@ -73,14 +76,9 @@ NeuralNetEvaluator::NeuralNetEvaluator(
     std::shared_ptr<BatchInferenceExecutor> executor)
     : executor_(std::move(executor)) {}
 
-// Public static — delegates to the anonymous-namespace impl so callers (and
-// tests) can access encoding without depending on a NeuralNetEvaluator instance.
-torch::Tensor NeuralNetEvaluator::BoardToTensor(const Board& board) {
-  return BoardToTensorImpl(board);
-}
-
 EvaluationResult NeuralNetEvaluator::Evaluate(const Board& board) {
-  auto future = executor_->Submit(BoardToTensorImpl(board));
+  auto future =
+      executor_->Submit(neural_net_evaluator_internal::BoardToTensor(board));
   auto [policy_logits, value] = future.get();
   return DecodeOutput(policy_logits, value, board.GetLegalActions());
 }

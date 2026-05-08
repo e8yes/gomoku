@@ -21,7 +21,7 @@ static Board MakeStandardBoard() {
 // ===========================================================================
 
 TEST(NeuralNetEvaluatorTest, TensorShape) {
-  auto t = NeuralNetEvaluator::BoardToTensor(MakeStandardBoard());
+  auto t = neural_net_evaluator_internal::BoardToTensor(MakeStandardBoard());
   ASSERT_EQ(t.dim(), 3);
   EXPECT_EQ(t.size(0), NeuralNetEvaluator::kNumInputChannels);
   EXPECT_EQ(t.size(1), Board::kSize);
@@ -32,7 +32,7 @@ TEST(NeuralNetEvaluatorTest, CurrentPlayerStonesInChannel0) {
   Board b = MakeStandardBoard();
   ASSERT_EQ(b.stone_to_place(), Player::kWhite);
 
-  auto t = NeuralNetEvaluator::BoardToTensor(b);
+  auto t = neural_net_evaluator_internal::BoardToTensor(b);
   auto acc = t.accessor<float, 3>();
   EXPECT_FLOAT_EQ(acc[0][0][1], 1.0f);  // (x=1, y=0) White → ch0
   EXPECT_FLOAT_EQ(acc[0][0][0], 0.0f);  // (x=0, y=0) Black → not ch0
@@ -43,7 +43,7 @@ TEST(NeuralNetEvaluatorTest, OpponentStonesInChannel1) {
   Board b = MakeStandardBoard();
   ASSERT_EQ(b.stone_to_place(), Player::kWhite);
 
-  auto t = NeuralNetEvaluator::BoardToTensor(b);
+  auto t = neural_net_evaluator_internal::BoardToTensor(b);
   auto acc = t.accessor<float, 3>();
   EXPECT_FLOAT_EQ(acc[1][0][0], 1.0f);  // Black → ch1
   EXPECT_FLOAT_EQ(acc[1][0][2], 1.0f);  // Black → ch1
@@ -54,7 +54,7 @@ TEST(NeuralNetEvaluatorTest, ColorPlanesWhiteTurn) {
   Board b = MakeStandardBoard();
   ASSERT_EQ(b.stone_to_place(), Player::kWhite);
 
-  auto t = NeuralNetEvaluator::BoardToTensor(b);
+  auto t = neural_net_evaluator_internal::BoardToTensor(b);
   auto acc = t.accessor<float, 3>();
   for (int y = 0; y < Board::kSize; ++y)
     for (int x = 0; x < Board::kSize; ++x) {
@@ -68,7 +68,7 @@ TEST(NeuralNetEvaluatorTest, ColorPlanesBlackTurn) {
   b.Apply(Action::FromXY(7, 7).id);
   ASSERT_EQ(b.stone_to_place(), Player::kBlack);
 
-  auto t = NeuralNetEvaluator::BoardToTensor(b);
+  auto t = neural_net_evaluator_internal::BoardToTensor(b);
   auto acc = t.accessor<float, 3>();
   for (int y = 0; y < Board::kSize; ++y)
     for (int x = 0; x < Board::kSize; ++x) {
@@ -78,7 +78,7 @@ TEST(NeuralNetEvaluatorTest, ColorPlanesBlackTurn) {
 }
 
 TEST(NeuralNetEvaluatorTest, EmptyBoardChannels0And1AllZero) {
-  auto t = NeuralNetEvaluator::BoardToTensor(Board{});
+  auto t = neural_net_evaluator_internal::BoardToTensor(Board{});
   auto acc = t.accessor<float, 3>();
   for (int y = 0; y < Board::kSize; ++y)
     for (int x = 0; x < Board::kSize; ++x) {
@@ -95,10 +95,12 @@ TEST(NeuralNetEvaluatorTest, EmptyBoardChannels0And1AllZero) {
 TEST(NeuralNetEvaluatorTest, EndToEndWithRealModel) {
   const std::filesystem::path model_path = "model.pt";
   if (!std::filesystem::exists(model_path)) {
-    GTEST_SKIP() << "model.pt not found; run: cd python && python create_model.py";
+    GTEST_SKIP()
+        << "model.pt not found; run: cd python && python create_model.py";
   }
 
-  torch::Device device = torch::cuda::is_available() ? torch::kCUDA : torch::kCPU;
+  torch::Device device =
+      torch::cuda::is_available() ? torch::kCUDA : torch::kCPU;
   auto exec = std::make_shared<BatchInferenceExecutor>(
       model_path, device, /*max_batch_size=*/8,
       /*max_wait_us=*/std::chrono::microseconds(500));
