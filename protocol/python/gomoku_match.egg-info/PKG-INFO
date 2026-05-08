@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: gomoku_match
+Version: 0.4.0
+Summary: Project-neutral Gomoku Swap2 matchmaking server and protocol
+Requires-Python: >=3.10

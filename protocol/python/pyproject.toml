@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gomoku_match"
+version = "0.4.0"
+description = "Project-neutral Gomoku Swap2 matchmaking server and protocol"
+requires-python = ">=3.10"
+# Pure-stdlib package (sqlite3, socket, threading, json, dataclasses).
+dependencies = []
+
+[project.scripts]
+gomoku-match = "gomoku_match.__main__:main"
+
+[tool.setuptools]
+packages = ["gomoku_match", "gomoku_match.adapters"]
+package-dir = {"" = "."}
