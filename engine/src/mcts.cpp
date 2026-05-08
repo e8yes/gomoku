@@ -132,6 +132,9 @@ void MCTS::SearchOnce(const Board& root_board, Evaluator* evaluator) {
 
   // Backpropagation
   for (MCTSNode* n : search_path) {
+    // Revert the artificial penalty applied during descent now that we have 
+    // the true evaluation. This effectively un-does the virtual loss so the
+    // node can be properly updated with the real result.
     n->RevertVirtualLoss();
     float v = (n->current_player() == leaf_seat) ? leaf_val : -leaf_val;
     n->Update(v);
