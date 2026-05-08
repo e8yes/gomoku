@@ -34,6 +34,14 @@ struct Action {
 
   Action(int i) : id(i) {}
   bool IsPlacement() const { return id >= 0 && id < 225; }
+
+  int x() const { return id % 15; }
+  int y() const { return id / 15; }
+
+  static Action FromXY(int x, int y) { return Action(y * 15 + x); }
+
+  std::string ToString() const;
+  static Action FromString(const std::string& str);
 };
 
 class Board {

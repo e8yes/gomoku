@@ -1,6 +1,42 @@
 #include "board.h"
 
 #include <stdexcept>
+#include <sstream>
+
+std::string Action::ToString() const {
+  if (id == kSwap2ChooseWhite) return "swap2_choose_white";
+  if (id == kSwap2ChooseBlack) return "swap2_choose_black";
+  if (id == kSwap2PlaceTwo) return "swap2_place_two";
+  if (id == kChooseWhite) return "choose_white";
+  if (id == kChooseBlack) return "choose_black";
+  
+  if (IsPlacement()) {
+    std::ostringstream oss;
+    oss << "(" << x() << "," << y() << ")";
+    return oss.str();
+  }
+  
+  return "invalid_action";
+}
+
+Action Action::FromString(const std::string& str) {
+  if (str == "swap2_choose_white") return Action(kSwap2ChooseWhite);
+  if (str == "swap2_choose_black") return Action(kSwap2ChooseBlack);
+  if (str == "swap2_place_two") return Action(kSwap2PlaceTwo);
+  if (str == "choose_white") return Action(kChooseWhite);
+  if (str == "choose_black") return Action(kChooseBlack);
+  
+  if (str.length() >= 5 && str.front() == '(' && str.back() == ')') {
+    size_t comma = str.find(',');
+    if (comma != std::string::npos) {
+      int x = std::stoi(str.substr(1, comma - 1));
+      int y = std::stoi(str.substr(comma + 1, str.length() - comma - 2));
+      return FromXY(x, y);
+    }
+  }
+  
+  throw std::invalid_argument("Invalid action string: " + str);
+}
 
 Board::Board() {
   cells_.fill(Player::kNone);
