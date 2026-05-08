@@ -87,6 +87,7 @@ void MCTS::SearchOnce(const Board& root_board, Evaluator* evaluator) {
   MCTSNode* node = root_.get();
   Board board = root_board;
   std::vector<MCTSNode*> search_path;
+  node->AddVirtualLoss();
   search_path.push_back(node);
 
   // Selection
@@ -103,13 +104,9 @@ void MCTS::SearchOnce(const Board& root_board, Evaluator* evaluator) {
     }
 
     node = best_child;
+    node->AddVirtualLoss();
     board.Apply(node->action_id());
     search_path.push_back(node);
-  }
-
-  // Add virtual loss
-  for (MCTSNode* n : search_path) {
-    n->AddVirtualLoss();
   }
 
   // Expansion & Evaluation
