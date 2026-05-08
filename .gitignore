@@ -30,3 +30,49 @@
 *.exe
 *.out
 *.app
+
+# C++ Build directories and tooling
+build/
+bin/
+lib/
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+Makefile
+cmake_install.cmake
+install_manifest.txt
+compile_commands.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Python - Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Python - Distribution / packaging
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+Thumbs.db
