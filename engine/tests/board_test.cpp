@@ -11,15 +11,15 @@ TEST(BoardTest, InitialState) {
 
 TEST(BoardTest, Swap2InitialThree) {
   Board board;
-  board.Apply(7 * 15 + 7);  // Center black
+  board.Apply(Action::FromXY(7, 7).id);  // Center black
   EXPECT_EQ(board.stone_to_place(), Player::kWhite);
   EXPECT_EQ(board.current_player(), Seat::kA);
 
-  board.Apply(8 * 15 + 8);  // White
+  board.Apply(Action::FromXY(8, 8).id);  // White
   EXPECT_EQ(board.stone_to_place(), Player::kBlack);
   EXPECT_EQ(board.current_player(), Seat::kA);
 
-  board.Apply(6 * 15 + 6);  // Black
+  board.Apply(Action::FromXY(6, 6).id);  // Black
 
   EXPECT_EQ(board.phase(), Phase::kSwap2Decision);
   EXPECT_EQ(board.stone_to_place(), Player::kNone);
@@ -36,57 +36,57 @@ TEST(BoardTest, ExactFiveRule) {
   Board board;
   // Fast-forward to standard play by A choosing Black and B choosing White
   // Let's use Swap2 Choose White
-  board.Apply(0);                          // B (0, 0)
-  board.Apply(1);                          // W (1, 0)
-  board.Apply(2);                          // B (2, 0)
+  board.Apply(Action::FromXY(0, 0).id);                          // B (0, 0)
+  board.Apply(Action::FromXY(1, 0).id);                          // W (1, 0)
+  board.Apply(Action::FromXY(2, 0).id);                          // B (2, 0)
   board.Apply(Action::kSwap2ChooseWhite);  // B chooses White. A is Black.
   // White to move. Current player is B.
   EXPECT_EQ(board.current_player(), Seat::kB);
   EXPECT_EQ(board.stone_to_place(), Player::kWhite);
 
   // B places W at (0, 1)
-  board.Apply(15 * 1 + 0);
+  board.Apply(Action::FromXY(0, 1).id);
   // A places B at (1, 14)
-  board.Apply(15 * 14 + 1);
+  board.Apply(Action::FromXY(1, 14).id);
 
   // Now let's form exactly five for White in a column
-  board.Apply(15 * 2 + 0);  // W
-  board.Apply(15 * 14 + 2); // B
-  board.Apply(15 * 3 + 0);  // W
-  board.Apply(15 * 14 + 3); // B
-  board.Apply(15 * 4 + 0);  // W
-  board.Apply(15 * 14 + 4); // B
+  board.Apply(Action::FromXY(0, 2).id);  // W
+  board.Apply(Action::FromXY(2, 14).id); // B
+  board.Apply(Action::FromXY(0, 3).id);  // W
+  board.Apply(Action::FromXY(3, 14).id); // B
+  board.Apply(Action::FromXY(0, 4).id);  // W
+  board.Apply(Action::FromXY(4, 14).id); // B
 
   // Next is W. Will place at (0, 5) making it 5 in a row
   EXPECT_EQ(board.result(), Result::kUndetermined);
-  board.Apply(15 * 5 + 0);  // W
+  board.Apply(Action::FromXY(0, 5).id);  // W
 
   EXPECT_EQ(board.result(), Result::kPlayerBWin);  // White is B
 }
 
 TEST(BoardTest, OverlineDoesNotWin) {
   Board board;
-  board.Apply(0);                          // B
-  board.Apply(1);                          // W
-  board.Apply(2);                          // B
+  board.Apply(Action::FromXY(0, 0).id);                          // B
+  board.Apply(Action::FromXY(1, 0).id);                          // W
+  board.Apply(Action::FromXY(2, 0).id);                          // B
   board.Apply(Action::kSwap2ChooseWhite);  // B chooses White. A is Black.
 
   // Setup a situation where a move creates 6 in a row.
   // W at (0, 1), W at (0, 2), W at (0, 3), W at (0, 5), W at (0, 6)
   // W places at (0, 4) to make 6.
-  board.Apply(15 * 1 + 0);  // W
-  board.Apply(15 * 14 + 1); // B
-  board.Apply(15 * 2 + 0);  // W
-  board.Apply(15 * 13 + 2); // B
-  board.Apply(15 * 3 + 0);  // W
-  board.Apply(15 * 14 + 3); // B
-  board.Apply(15 * 5 + 0);  // W
-  board.Apply(15 * 13 + 4); // B
-  board.Apply(15 * 6 + 0);  // W
-  board.Apply(15 * 14 + 5); // B
+  board.Apply(Action::FromXY(0, 1).id);  // W
+  board.Apply(Action::FromXY(1, 14).id); // B
+  board.Apply(Action::FromXY(0, 2).id);  // W
+  board.Apply(Action::FromXY(2, 13).id); // B
+  board.Apply(Action::FromXY(0, 3).id);  // W
+  board.Apply(Action::FromXY(3, 14).id); // B
+  board.Apply(Action::FromXY(0, 5).id);  // W
+  board.Apply(Action::FromXY(4, 13).id); // B
+  board.Apply(Action::FromXY(0, 6).id);  // W
+  board.Apply(Action::FromXY(5, 14).id); // B
 
   // W places at (0, 4)
-  board.Apply(15 * 4 + 0);  // W
+  board.Apply(Action::FromXY(0, 4).id);  // W
 
   // Overline! Should not win.
   EXPECT_EQ(board.result(), Result::kUndetermined);

@@ -15,7 +15,7 @@ void CompareBoards(const Board& a, const Board& b) {
 TEST(BoardTest, RetractStandard) {
   Board board;
   std::vector<int> moves = {
-      0, 1, 2, Action::kSwap2ChooseWhite, 15*1+0, 15*14+1, 15*2+0, 15*14+2
+      Action::FromXY(0, 0).id, Action::FromXY(1, 0).id, Action::FromXY(2, 0).id, Action::kSwap2ChooseWhite, Action::FromXY(0, 1).id, Action::FromXY(1, 14).id, Action::FromXY(0, 2).id, Action::FromXY(2, 14).id
   };
   
   std::vector<Board> history;
@@ -35,12 +35,33 @@ TEST(BoardTest, RetractStandard) {
 TEST(BoardTest, RetractSwap2PlaceTwo) {
   Board board;
   std::vector<int> moves = {
-      0, 1, 2, Action::kSwap2PlaceTwo, 15*1+0, 15*14+1, Action::kChooseBlack, 15*2+0, 15*14+2
+      Action::FromXY(0, 0).id, Action::FromXY(1, 0).id, Action::FromXY(2, 0).id, Action::kSwap2PlaceTwo, Action::FromXY(0, 1).id, Action::FromXY(1, 14).id, Action::kChooseBlack, Action::FromXY(0, 2).id, Action::FromXY(2, 14).id
   };
   
   std::vector<Board> history;
   history.push_back(board);
   
+  for (int m : moves) {
+    board.Apply(m);
+    history.push_back(board);
+  }
+  
+  for (int i = moves.size() - 1; i >= 0; --i) {
+    board.Retract(moves[i]);
+    CompareBoards(board, history[i]);
+  }
+}
+
+TEST(BoardTest, RetractWinningMove) {
+  Board board;
+  std::vector<int> moves = {
+      Action::FromXY(0, 0).id, Action::FromXY(0, 1).id, Action::FromXY(1, 0).id, Action::kSwap2ChooseWhite,
+      // now W is current player. B is Seat A. W is Seat B.
+      Action::FromXY(1, 1).id, Action::FromXY(2, 0).id, Action::FromXY(2, 1).id, Action::FromXY(3, 0).id, Action::FromXY(3, 1).id, Action::FromXY(4, 0).id
+  };
+  
+  std::vector<Board> history;
+  history.push_back(board);
   for (int m : moves) {
     board.Apply(m);
     history.push_back(board);

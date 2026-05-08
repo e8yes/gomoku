@@ -93,10 +93,8 @@ void Board::Apply(int action_id) {
           result_ = Result::kPlayerAWin;
         else
           result_ = Result::kPlayerBWin;
-        return;
       } else if (move_count_ == kNumCells) {
         result_ = Result::kDraw;
-        return;
       }
     }
 

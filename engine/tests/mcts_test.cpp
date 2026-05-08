@@ -12,16 +12,16 @@ TEST(MCTSTest, SimpleEndgame) {
 
   Board board;
   // Fast-forward to standard phase, A is Black, B is White
-  board.Apply(0);                          // B
-  board.Apply(1);                          // W
-  board.Apply(2);                          // B
+  board.Apply(Action::FromXY(0, 0).id);                          // B
+  board.Apply(Action::FromXY(1, 0).id);                          // W
+  board.Apply(Action::FromXY(2, 0).id);                          // B
   board.Apply(Action::kSwap2ChooseBlack);  // B chooses Black. A becomes White.
   // A becomes White. Next to move is White (A).
   EXPECT_EQ(board.current_player(), Seat::kA);
   EXPECT_EQ(board.stone_to_place(), Player::kWhite);
 
   // Let's make it Black's turn (B). White plays somewhere useless.
-  board.Apply(15 * 10 + 10);  // W
+  board.Apply(Action::FromXY(10, 10).id);  // W
   EXPECT_EQ(board.current_player(), Seat::kB);
   EXPECT_EQ(board.stone_to_place(), Player::kBlack);
 
@@ -30,23 +30,23 @@ TEST(MCTSTest, SimpleEndgame) {
   // Let's do it properly.
 
   Board b;
-  b.Apply(0);  // B
-  b.Apply(1);  // W
-  b.Apply(2);  // B
+  b.Apply(Action::FromXY(0, 0).id);  // B
+  b.Apply(Action::FromXY(1, 0).id);  // W
+  b.Apply(Action::FromXY(2, 0).id);  // B
   b.Apply(
       Action::kSwap2ChooseBlack);  // B chooses Black. A is White. Next is W(A).
 
-  b.Apply(15 * 1 + 0);  // W
-  b.Apply(15 * 0 + 0);  // B
-  b.Apply(15 * 1 + 1);  // W
-  b.Apply(15 * 0 + 1);  // B
-  b.Apply(15 * 1 + 2);  // W
-  b.Apply(15 * 0 + 2);  // B
-  b.Apply(15 * 1 + 3);  // W
-  b.Apply(15 * 0 + 3);  // B
+  b.Apply(Action::FromXY(0, 1).id);  // W
+  b.Apply(Action::FromXY(0, 0).id);  // B
+  b.Apply(Action::FromXY(1, 1).id);  // W
+  b.Apply(Action::FromXY(1, 0).id);  // B
+  b.Apply(Action::FromXY(2, 1).id);  // W
+  b.Apply(Action::FromXY(2, 0).id);  // B
+  b.Apply(Action::FromXY(3, 1).id);  // W
+  b.Apply(Action::FromXY(3, 0).id);  // B
 
   // W's turn
-  b.Apply(15 * 1 + 10);  // W useless move
+  b.Apply(Action::FromXY(10, 1).id);  // W useless move
 
   // Now it is B's turn (Black).
   // B has stones at (0,0), (0,1), (0,2), (0,3).
@@ -59,5 +59,5 @@ TEST(MCTSTest, SimpleEndgame) {
   mcts.Search(b, &evaluator);
 
   int best_move = mcts.GetBestMove();
-  EXPECT_EQ(best_move, 4);  // Index of (0, 4)
+  EXPECT_EQ(best_move, Action::FromXY(4, 0).id);  // Index of (4, 0)
 }
