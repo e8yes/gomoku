@@ -32,29 +32,20 @@ void MCTSNode::Expand(const Board& board, const std::vector<float>& move_pmf) {
 }
 
 void MCTSNode::Update(float value) {
-  float current_val = value_sum_.load(std::memory_order_relaxed);
-  while (!value_sum_.compare_exchange_weak(current_val, current_val + value,
-                                           std::memory_order_relaxed)) {
-  }
+  value_sum_.fetch_add(value, std::memory_order_relaxed);
   visits_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void MCTSNode::AddVirtualLoss() {
   visits_.fetch_add(kVirtualLoss, std::memory_order_relaxed);
   float loss = -1.0f * kVirtualLoss;
-  float current_val = value_sum_.load(std::memory_order_relaxed);
-  while (!value_sum_.compare_exchange_weak(current_val, current_val + loss,
-                                           std::memory_order_relaxed)) {
-  }
+  value_sum_.fetch_add(loss, std::memory_order_relaxed);
 }
 
 void MCTSNode::RevertVirtualLoss() {
   visits_.fetch_sub(kVirtualLoss, std::memory_order_relaxed);
   float loss = 1.0f * kVirtualLoss;
-  float current_val = value_sum_.load(std::memory_order_relaxed);
-  while (!value_sum_.compare_exchange_weak(current_val, current_val + loss,
-                                           std::memory_order_relaxed)) {
-  }
+  value_sum_.fetch_add(loss, std::memory_order_relaxed);
 }
 
 MCTS::MCTS(int num_simulations, int num_threads, float c_puct)
@@ -63,6 +54,8 @@ MCTS::MCTS(int num_simulations, int num_threads, float c_puct)
       c_puct_(c_puct) {}
 
 void MCTS::Search(const Board& root_board, Evaluator* evaluator) {
+  // TODO: Implement Tree Caching (Section 3.2). Currently we throw away the 
+  // tree on every search. We should preserve it and advance the root pointer.
   root_ = std::make_unique<MCTSNode>(-1, 1.0f, root_board.current_player());
 
   // Evaluate root
