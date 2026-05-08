@@ -32,9 +32,31 @@ import torch
 import torch.nn as nn
 from torchsummary import summary
 
-NUM_INPUT_CHANNELS = 4   # must match NeuralNetEvaluator::kNumInputChannels
+# Input channel layout (must match NeuralNetEvaluator::kNumInputChannels and
+# the encoding in NeuralNetEvaluator::BoardToTensorImpl):
+#
+#   Ch 0 — Current player's stones (1.0 where present, else 0.0)
+#   Ch 1 — Opponent's stones       (1.0 where present, else 0.0)
+#   Ch 2 — Constant 1.0 if the current player is Black, else 0.0
+#   Ch 3 — Constant 1.0 if the current player is White, else 0.0
+#
+# Rationale:
+#   Channels 0 & 1 give the network a consistent first-person view of the
+#   board regardless of stone colour, so the same weights handle both sides.
+#
+#   Channels 2 & 3 are the "colour-to-move" indicator planes. They are
+#   necessary because Gomoku with Swap2 assigns colours dynamically: a player
+#   who places the initial three stones may end up as either Black or White
+#   depending on the opponent's Swap2 decision. Without an explicit colour
+#   signal the network cannot distinguish:
+#     - whose long-term positional advantage is larger (Black typically has a
+#       stronger first-move advantage in Gomoku);
+#     - which side is subject to the exact-five rule (overlines don't win).
+#   Constant planes (all 0s or all 1s) are the standard AlphaZero approach
+#   for injecting scalar game-state information into the convolutional stream.
+NUM_INPUT_CHANNELS = 4   # total input channels; see layout above
 BOARD_SIZE = 15
-NUM_ACTIONS = 230        # must match Board::kNumActions
+NUM_ACTIONS = 230        # must match Board::kNumActions (225 cells + 5 Swap2)
 
 NUM_FILTERS = 128
 NUM_BLOCKS  = 10
@@ -95,6 +117,9 @@ class ResBlock(nn.Module):
 
 class GomokuNet(nn.Module):
     """10-block SE-ResNet for 15×15 Gomoku (Swap2 variant).
+
+    Input:  float32 [batch, 4, 15, 15]  — see NUM_INPUT_CHANNELS for layout.
+    Output: (policy_logits [batch, 230], value [batch, 1])
 
     Designed to fit comfortably on the RTX 4060 Ti at batch size 256–512.
     """
