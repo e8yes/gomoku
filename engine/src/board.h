@@ -50,10 +50,9 @@ class Board {
   // Apply action and transition state. Assumes the action is legal.
   void Apply(int action_id);
 
-  // Retract action. Required for fast tree search if we decide not to copy the
-  // board. However, AlphaZero MCTS usually copies the board when descending.
-  // Given the small size (225 bytes), copying is extremely fast.
-  // We will provide a copy constructor and fast placement.
+  // Retract action. This is fully copyless and purely deterministic, perfectly 
+  // suited for minimax perturbation and highly-efficient tree unmaking.
+  void Retract(int action_id);
 
   // Get current seat to move.
   Seat current_player() const { return current_player_; }

@@ -21,6 +21,7 @@ set(ENGINE_SOURCES
 
 add_library(engine_lib ${ENGINE_SOURCES})
 
-add_executable(engine_tests tests/board_test.cpp tests/mcts_test.cpp)
+add_executable(engine_tests tests/board_test.cpp tests/mcts_test.cpp tests/retract_test.cpp)
 target_link_libraries(engine_tests engine_lib GTest::gtest_main)
 add_test(NAME engine_tests COMMAND engine_tests)
+

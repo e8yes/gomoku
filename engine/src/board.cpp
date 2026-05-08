@@ -168,3 +168,64 @@ float Board::GetValueForSeat(Seat seat) const {
   }
   return 0.0f;
 }
+
+void Board::Retract(int action_id) {
+  result_ = Result::kUndetermined;
+  Action a(action_id);
+
+  if (!a.IsPlacement()) {
+    if (a.id == Action::kSwap2ChooseWhite || a.id == Action::kSwap2ChooseBlack || a.id == Action::kSwap2PlaceTwo) {
+      seat_a_stone_ = Player::kNone;
+      seat_b_stone_ = Player::kNone;
+      phase_ = Phase::kSwap2Decision;
+      stone_to_place_ = Player::kNone;
+      current_player_ = Seat::kB;
+    } else if (a.id == Action::kChooseWhite || a.id == Action::kChooseBlack) {
+      seat_a_stone_ = Player::kNone;
+      seat_b_stone_ = Player::kNone;
+      phase_ = Phase::kChooseColor;
+      stone_to_place_ = Player::kNone;
+      current_player_ = Seat::kA;
+    }
+    return;
+  }
+
+  // Placement
+  cells_[a.id] = Player::kNone;
+  move_count_--;
+
+  if (move_count_ == 0) {
+    phase_ = Phase::kPlaceInitialThree;
+    stone_to_place_ = Player::kBlack;
+    current_player_ = Seat::kA;
+  } else if (move_count_ == 1) {
+    phase_ = Phase::kPlaceInitialThree;
+    stone_to_place_ = Player::kWhite;
+    current_player_ = Seat::kA;
+  } else if (move_count_ == 2) {
+    phase_ = Phase::kPlaceInitialThree;
+    stone_to_place_ = Player::kBlack;
+    current_player_ = Seat::kA;
+  } else if (move_count_ == 3) {
+    if (phase_ == Phase::kSwap2PlaceTwo) {
+      stone_to_place_ = Player::kWhite;
+      current_player_ = Seat::kB;
+    } else {
+      stone_to_place_ = Player::kWhite;
+      current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+    }
+  } else if (move_count_ == 4) {
+    if (phase_ == Phase::kChooseColor) {
+      phase_ = Phase::kSwap2PlaceTwo;
+      stone_to_place_ = Player::kBlack;
+      current_player_ = Seat::kB;
+    } else {
+      stone_to_place_ = (stone_to_place_ == Player::kBlack) ? Player::kWhite : Player::kBlack;
+      current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+    }
+  } else {
+    stone_to_place_ = (stone_to_place_ == Player::kBlack) ? Player::kWhite : Player::kBlack;
+    current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+  }
+}
+
