@@ -177,14 +177,26 @@ def main():
     assert torch.cuda.is_available(), "CUDA is not available"
     device = torch.device("cuda")
 
-    model = GomokuNet().to(device)
-    model.eval()
+    # torchsummary feeds float32 inputs internally, so run it before .half().
+    model_fp32 = GomokuNet().to(device).eval()
+    summary(model_fp32, (NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE))
+    del model_fp32
 
-    summary(model, (NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE))
+    # FP16 inference — the RTX 4060 Ti has a 128-bit memory bus (288 GB/s).
+    # Inference is memory-bandwidth-bound, not compute-bound: FP16 weights are
+    # half the size, halving the DRAM traffic per forward pass and effectively
+    # doubling throughput. Tensor cores are also fully engaged in FP16 mode.
+    # The C++ BatchInferenceExecutor casts float32 board tensors to FP16 before
+    # the forward pass and converts outputs back to float32 after; callers
+    # (NeuralNetEvaluator) remain unaware of the precision used internally.
+    model = GomokuNet().to(device).half().eval()
 
-    # torch.jit.trace for LibTorch (C++) loading.
+    # torch.jit.trace for LibTorch (C++) loading. Must trace in FP16 so the
+    # exported model's internal dtypes match what RunBatch sends at inference.
     # Note: for Python-side training (Phase 3) wrap with torch.compile() instead.
-    dummy = torch.zeros(1, NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE, device=device)
+    dummy = torch.zeros(
+        1, NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE,
+        device=device, dtype=torch.float16)
     traced = torch.jit.trace(model, dummy)
 
     # Sanity check shapes.

@@ -11,13 +11,23 @@ namespace {
 std::vector<BatchInferenceExecutor::Output> RunBatch(
     torch::jit::Module& model, torch::Device device,
     const std::vector<torch::Tensor>& inputs) {
-  torch::Tensor batch = torch::stack(inputs, /*dim=*/0).to(device);
+  // Stack CPU float32 board tensors → [N, C, H, W], move to GPU.
+  // Cast to FP16: the 4060 Ti has a 128-bit memory bus (288 GB/s), making
+  // inference memory-bandwidth-bound. FP16 halves weight traffic per forward
+  // pass and engages the tensor cores, roughly doubling throughput.
+  torch::Tensor batch =
+      torch::stack(inputs, /*dim=*/0).to(device).to(torch::kFloat16);
 
   torch::NoGradGuard no_grad;
   auto out = model.forward({batch}).toTuple();
 
-  torch::Tensor policy = out->elements()[0].toTensor().cpu();  // [N, A]
-  torch::Tensor values = out->elements()[1].toTensor().cpu();  // [N, 1]
+  // Convert FP16 outputs back to FP32 on CPU so downstream consumers
+  // (NeuralNetEvaluator::DecodeOutput) can use float accessors unchanged.
+  torch::Tensor policy =
+      out->elements()[0].toTensor().to(torch::kFloat32).cpu();  // [N, A]
+  torch::Tensor values =
+      out->elements()[1].toTensor().to(torch::kFloat32).cpu();  // [N, 1]
+
 
   const int N = static_cast<int>(inputs.size());
   std::vector<BatchInferenceExecutor::Output> results;
