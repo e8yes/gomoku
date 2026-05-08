@@ -104,6 +104,12 @@ void MCTS::SearchOnce(const Board& root_board, Evaluator* evaluator) {
     }
 
     node = best_child;
+
+    // IMPORTANT: Apply virtual loss IMMEDIATELY upon selection during descent.
+    // This acts as a lock-free penalty. If multiple threads start simultaneously, 
+    // the moment one thread selects this child, its UCB score artificially drops 
+    // for any concurrent threads, naturally steering them to explore different 
+    // parallel branches instead of redundantly evaluating the same path.
     node->AddVirtualLoss();
     board.Apply(node->action_id());
     search_path.push_back(node);
