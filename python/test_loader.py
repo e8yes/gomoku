@@ -4,6 +4,17 @@ import numpy as np
 import torch
 from cumulative_dataset import GomokuDataset
 
+def pack_game_states(states):
+    """Packs [N, 9, 15, 15] 0/1 states into [N, 254] bit-packed uint8."""
+    packed = []
+    for s in states:
+        bits = s.flatten()
+        # Pad to 254*8 = 2032 bits
+        padded = np.zeros(2032, dtype=np.uint8)
+        padded[:2025] = bits
+        packed.append(np.packbits(padded))
+    return np.array(packed)
+
 def test_binary_roundtrip():
     data_dir = "test_data"
     if not os.path.exists(data_dir):
@@ -17,21 +28,6 @@ def test_binary_roundtrip():
     
     # Create random states (9 channels, 15x15)
     states = np.random.randint(0, 2, (num_moves, 9, 15, 15)).astype(np.uint8)
-    packed_states = np.packbits(states, axis=None).reshape(num_moves, 254) # Wait, 254 is correct for 2025 bits
-    
-    # Actually, let's be precise: 15*15*9 = 2025 bits. 2025 / 8 = 253.125 -> 254 bytes.
-    # To pack 2025 bits correctly into 254 bytes:
-    def pack_game_states(states):
-        # states: [N, 9, 15, 15]
-        packed = []
-        for s in states:
-            bits = s.flatten()
-            # Pad to 254*8 = 2032 bits
-            padded = np.zeros(2032, dtype=np.uint8)
-            padded[:2025] = bits
-            packed.append(np.packbits(padded))
-        return np.array(packed)
-
     packed_states = pack_game_states(states)
     
     # Random probs (float16)
