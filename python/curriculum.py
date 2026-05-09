@@ -6,7 +6,7 @@ import torch
 import shutil
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 # Architecture source
 from create_model import GomokuNet, NUM_INPUT_CHANNELS, BOARD_SIZE
@@ -98,7 +98,7 @@ def export_to_torchscript(weights_path: str, export_path: str):
 def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
     """
     Executes a single iteration of the AlphaZero training loop.
-    Returns the path to the new challenger weights and whether it should be promoted.
+    Returns: (new_champion_path, promoted, win_rate, policy_loss, value_loss)
     """
     logging.info(f"\n{'='*60}")
     logging.info(f" ITERATION {iteration:02d} / {config.num_iterations - 1}")
@@ -139,7 +139,7 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
     logging.info(f"[*] Training challenger model: {challenger_path}")
     
     # Call the training function directly instead of launching a new process
-    train(
+    pi_loss, v_loss = train(
         data_dir=config.data_dir,
         model_path=challenger_path,
         load_path=champion_path if (champion_path and os.path.exists(champion_path)) else None,
@@ -174,10 +174,27 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
 
     if promoted:
         logging.info(f"[+] Challenger PROMOTED to Champion!")
-        return challenger_path, True
+        return challenger_path, True, win_rate, pi_loss, v_loss
     else:
         logging.info(f"[-] Challenger failed to beat threshold. Retaining current Champion.")
-        return champion_path, False
+        return champion_path, False, win_rate, pi_loss, v_loss
+
+def log_training_summary(history: List[Dict[str, Any]]):
+    """Logs a formatted table of training progress."""
+    header = f"{'iteration':<12} {'win rate':<12} {'policy loss':<15} {'value loss':<12}"
+    logging.info("\n" + "="*60)
+    logging.info(" TRAINING PROGRESS SUMMARY")
+    logging.info("-" * 60)
+    logging.info(header)
+    
+    for entry in history:
+        it = entry["iteration"]
+        wr = f"{entry['win_rate']:.2f}" if entry["win_rate"] is not None and it > 0 else "N/A"
+        pi = f"{entry['policy_loss']:.4f}"
+        v = f"{entry['value_loss']:.4f}"
+        logging.info(f"{it:<12} {wr:<12} {pi:<15} {v:<12}")
+    
+    logging.info("="*60 + "\n")
 
 def main():
     config = CurriculumConfig.load("curriculum_schedule.json")
@@ -196,16 +213,27 @@ def main():
 
     # Initial champion is None for the bootstrapping phase
     champion_path = None 
+    history = []
 
     for i in range(0, config.num_iterations):
-        champion_path, promoted = run_iteration(i, config, champion_path)
+        champion_path, promoted, win_rate, pi_loss, v_loss = run_iteration(i, config, champion_path)
         
+        history.append({
+            "iteration": i,
+            "win_rate": win_rate,
+            "policy_loss": pi_loss,
+            "value_loss": v_loss
+        })
+
         # Periodically update the production champion
         if promoted:
             champion_export = os.path.join(config.model_export_path, "champion.pt")
             challenger_export = os.path.join(config.model_export_path, f"challenger{i:02d}.pt")
             shutil.copy2(challenger_export, champion_export)
             logging.info(f"[*] Updated production champion: {champion_export}")
+
+        # Log the full table after each iteration
+        log_training_summary(history)
 
         if datetime.datetime.now() > end_time:
             logging.info("Time limit reached. Stopping training.")
