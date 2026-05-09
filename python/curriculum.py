@@ -11,23 +11,31 @@ NUM_ITERATIONS = 15
 GAMES_PER_ITERATION = 10000
 
 # # TODO: Point this to the C++ self-play executable once Phase 4 is done.
-SELF_PLAY_BIN = "../build/self_play"
+GAME_GENERATOR_BIN = "./gomoku_game_generator"
 
 def get_current_day():
     return datetime.datetime.now().strftime("%Y-%m-%d")
 
-def run_iteration(iteration):
+def run_iteration(iteration: int):
+    """
+    Executes a single iteration of the AlphaZero training loop, including
+    self-play data generation, model training, and TorchScript export.
+    """
     print(f"\n{'='*60}")
     print(f" ITERATION {iteration:02d} / {NUM_ITERATIONS}")
     print(f"{'='*60}")
 
-    # 1. Self-Play (Phase 4)
-    if os.path.exists(SELF_PLAY_BIN):
-        print(f"[*] Starting C++ Self-Play data generation...")
-        # Example command: ./self_play --games 10000 --output data/shard_iter_01.bin
-        # subprocess.run([SELF_PLAY_BIN, "--games", str(GAMES_PER_ITERATION), "--out_dir", DATA_DIR])
-    else:
-        print(f"[!] # TODO: SELF_PLAY_BIN ({SELF_PLAY_BIN}) not found. Skipping data generation.")
+    # TODO: 1. Self-Play (Phase 4)
+    assert os.path.exists(GAME_GENERATOR_BIN), f"[!] {GAME_GENERATOR_BIN} not found. Skipping data generation."
+    print(f"[*] Starting C++ Self-Play data generation...")
+    # Example command: ./gomoku_game_generator      \
+    #   --champion_model=...champion.pt             \
+    #   --challenger_model=...iteration_01.pt       \
+    #   --iteration_number 2                        \
+    #   --time_limit_seconds 17280                  \
+    #   --output data/shard_iter_02.bin             \
+    #   --game_stats data/game_stats_iter_02.json
+    # subprocess.run([GAME_GENERATOR_BIN, "--games", str(GAMES_PER_ITERATION), "--out_dir", DATA_DIR])
 
     # Detect virtual environment
     python_bin = "python3"
@@ -37,10 +45,11 @@ def run_iteration(iteration):
             python_bin = path
             break
 
+    # 2. Train Model
     print(f"[*] Starting Python training for iteration {iteration} using {python_bin}...")
     weights_path = os.path.join(WEIGHTS_DIR, f"model_iter_{iteration:02d}.pth")
-    prev_weights = os.path.join(WEIGHTS_DIR, f"model_iter_{iteration-1:02d}.pth") if iteration > 1 else "none"
-    
+    prev_weights = os.path.join(WEIGHTS_DIR, f"model_iter_{iteration-1:02d}.pth") if iteration > 1 else None
+
     cmd = [
         python_bin, "train.py",
         "--data_dir", DATA_DIR,
@@ -49,18 +58,14 @@ def run_iteration(iteration):
         "--epochs", "10"
     ]
     
-    if os.path.exists(prev_weights):
-        # In a real setup, train.py would load these weights automatically if passed
-        pass 
+    if prev_weights and os.path.exists(prev_weights):
+        cmd.extend(["--load_path", prev_weights])
 
-    subprocess.run(cmd)
-
-    # 3. Export to TorchScript (Phase 2/3)
-    print(f"[*] Exporting model for C++ inference...")
-    # This would involve loading weights into GomokuNet and calling torch.jit.trace
-    # subprocess.run(["python", "create_model.py", "--weights", weights_path, "--out", MODEL_EXPORT_PATH])
-
+    subprocess.run(cmd, check=True)
     print(f"[*] Iteration {iteration} complete.\n")
+
+    # 3. Load game_stats_iter_02.json and decide whether to promote the
+    # challenger to champion.
 
 def main():
     if not os.path.exists(WEIGHTS_DIR): os.makedirs(WEIGHTS_DIR)

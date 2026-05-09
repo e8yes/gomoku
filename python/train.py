@@ -58,6 +58,7 @@ def _train_epoch(
 def train(
     data_dir: str,
     model_path: str,
+    load_path: str = None,
     batch_size: int = 256,
     epochs: int = 5,
     lr: float = 1e-3,
@@ -95,10 +96,13 @@ def train(
     model = GomokuNet().to(device).to(torch.bfloat16)
     
     # Load existing weights if available
-    if os.path.exists(model_path):
-        print(f"Loading weights from {model_path}")
+    effective_load_path = load_path if load_path else model_path
+    if effective_load_path and os.path.exists(effective_load_path):
+        print(f"Loading weights from {effective_load_path}")
         # Note: If weights were saved as float32, we may need to cast
-        model.load_state_dict(torch.load(model_path, map_location=device))
+        model.load_state_dict(torch.load(effective_load_path, map_location=device))
+    elif load_path:
+        print(f"Warning: load_path {load_path} specified but not found.")
 
     # 3. Optimizer & Scheduler
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -130,6 +134,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="data")
     parser.add_argument("--model_path", type=str, default="weights.pth")
+    parser.add_argument("--load_path", type=str, default=None)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -138,6 +143,7 @@ if __name__ == "__main__":
     train(
         data_dir=args.data_dir,
         model_path=args.model_path,
+        load_path=args.load_path,
         batch_size=args.batch_size,
         epochs=args.epochs,
         lr=args.lr
