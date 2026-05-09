@@ -4,6 +4,7 @@ import datetime
 import json
 import torch
 import shutil
+import logging
 from dataclasses import dataclass, field
 from typing import Dict, Any
 
@@ -37,6 +38,24 @@ class CurriculumConfig:
     def save(self, path: str):
         with open(path, 'w') as f:
             json.dump(self.__dict__, f, indent=2)
+
+def setup_logging():
+    """Sets up logging to both console and a timestamped file."""
+    if not os.path.exists("logs"):
+        os.makedirs("logs")
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join("logs", f"training_{timestamp}.log")
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    logging.info(f"Logging initialized. File: {log_file}")
 
 def get_python_bin():
     """Detects the virtual environment python binary."""
@@ -74,16 +93,16 @@ def export_to_torchscript(weights_path: str, export_path: str):
 
     traced = torch.jit.trace(model, dummy)
     traced.save(export_path)
-    print(f"[*] Exported {weights_path} to {export_path}")
+    logging.info(f"Exported {weights_path} to {export_path}")
 
 def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
     """
     Executes a single iteration of the AlphaZero training loop.
     Returns the path to the new challenger weights and whether it should be promoted.
     """
-    print(f"\n{'='*60}")
-    print(f" ITERATION {iteration:02d} / {config.num_iterations - 1}")
-    print(f"{'='*60}")
+    logging.info(f"\n{'='*60}")
+    logging.info(f" ITERATION {iteration:02d} / {config.num_iterations - 1}")
+    logging.info(f"{'='*60}")
 
     challenger_path = os.path.join(config.weights_dir, f"model_iter_{iteration:02d}.pth")
 
@@ -92,7 +111,7 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
     # produce a seed dataset using internal heuristics or random play.
     # Iteration k > 0: High-quality data generation by matching the current 
     # champion against the challenger from iteration k-1.
-    print(f"[*] Starting C++ Self-Play (Iteration: {iteration})...")
+    logging.info(f"[*] Starting C++ Self-Play (Iteration: {iteration})...")
     
     champion_pt = os.path.join(config.model_export_path, "champion.pt")
     prev_challenger_pt = os.path.join(config.model_export_path, f"challenger{iteration-1:02d}.pt") if iteration > 0 else None
@@ -114,10 +133,10 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
         # subprocess.run(cmd, check=True)
         pass
     else:
-        print(f"[!] {config.game_generator_bin} not found. Skipping data generation.")
+        logging.warning(f"{config.game_generator_bin} not found. Skipping data generation.")
 
     # 2. Train Model (Challenger)
-    print(f"[*] Training challenger model: {challenger_path}")
+    logging.info(f"[*] Training challenger model: {challenger_path}")
     
     # Call the training function directly instead of launching a new process
     train(
@@ -136,10 +155,10 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
     # 3. Evaluation (Champion vs Challenger)
     # The game generator outputs statistics about the match between champion and challenger.
     # For iteration 0, we auto-promote to establish the initial champion.
-    print(f"[*] Evaluating challenger promotion...")
+    logging.info(f"[*] Evaluating challenger promotion...")
     
     if iteration == 0:
-        print(f"[+] Iteration 0: Auto-promoting initial champion.")
+        logging.info(f"[+] Iteration 0: Auto-promoting initial champion.")
         promoted = True
         win_rate = 1.0
     else:
@@ -151,13 +170,13 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
         
         win_rate = float(stats["challenger_win_rate"])
         promoted = win_rate >= config.min_promotion_win_rate
-        print(f"[*] Challenger Win Rate: {win_rate:.2%} (Threshold: {config.min_promotion_win_rate:.2%})")
+        logging.info(f"[*] Challenger Win Rate: {win_rate:.2%} (Threshold: {config.min_promotion_win_rate:.2%})")
 
     if promoted:
-        print(f"[+] Challenger PROMOTED to Champion!")
+        logging.info(f"[+] Challenger PROMOTED to Champion!")
         return challenger_path, True
     else:
-        print(f"[-] Challenger failed to beat threshold. Retaining current Champion.")
+        logging.info(f"[-] Challenger failed to beat threshold. Retaining current Champion.")
         return champion_path, False
 
 def main():
@@ -167,11 +186,13 @@ def main():
     if not os.path.exists(config.data_dir): os.makedirs(config.data_dir)
     if not os.path.exists(config.model_export_path): os.makedirs(config.model_export_path)
 
+    setup_logging()
+
     start_time = datetime.datetime.now()
     end_time = start_time + datetime.timedelta(days=15)
     
-    print(f"Gomoku AlphaZero Training Manager Started")
-    print(f"Target End Date: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logging.info(f"Gomoku AlphaZero Training Manager Started")
+    logging.info(f"Target End Date: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
     # Initial champion is None for the bootstrapping phase
     champion_path = None 
@@ -184,10 +205,10 @@ def main():
             champion_export = os.path.join(config.model_export_path, "champion.pt")
             challenger_export = os.path.join(config.model_export_path, f"challenger{i:02d}.pt")
             shutil.copy2(challenger_export, champion_export)
-            print(f"[*] Updated production champion: {champion_export}")
+            logging.info(f"[*] Updated production champion: {champion_export}")
 
         if datetime.datetime.now() > end_time:
-            print("Time limit reached. Stopping training.")
+            logging.info("Time limit reached. Stopping training.")
             break
 
 if __name__ == "__main__":
