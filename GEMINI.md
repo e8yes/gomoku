@@ -5,7 +5,7 @@ This document outlines the development plan for our Gomoku engine with Swap2 sup
 ## 1. Architecture: C++ Engine & Python Training
 
 - **C++ Search Engine**: The MCTS core, board logic, and batched inference manager will be written purely in C++. During self-play, this C++ engine handles the tree search and queries the GPU.
-- **Python Training Pipeline**: Python will be used to manage the replay buffer, parse data, and train the PyTorch ResNet model. The trained weights will be exported (e.g., via TorchScript/ONNX) to be loaded by the C++ engine.
+- **Python Training Pipeline**: Python will be used to manage the cumulative dataset, parse data, and train the PyTorch ResNet model. The trained weights will be exported (e.g., via TorchScript/ONNX) to be loaded by the C++ engine.
 
 ## 2. Advanced Training & Data Strategy
 
@@ -46,8 +46,10 @@ To maximize the throughput of the RTX 4060 Ti during self-play, the C++ engine w
 - **Parallel Tree Search Batching**: Implement the queuing mechanism to batch node evaluations from the multiple MCTS threads exploring the *single* game tree.
 
 ### Phase 3: Python Training Pipeline
-- Build the PyTorch ResNet model.
-- Implement the replay buffer, data parser, and the iterative training loop.
+- **ResNet Implementation**: Build the PyTorch ResNet model (18M parameters) with SE-blocks.
+- **Cumulative Dataset Manager**: Implement a disk-backed storage system to store and index all self-play games from Iteration 1 to the end, preventing overfitting and ensuring tactical variety.
+- **Horizon-Filtered Data Loader**: Implement a PyTorch `Dataset` that samples moves from the cumulative store according to the incremental horizon strategy (Section 2.1).
+- **Iterative Training Loop**: Develop the orchestration script to manage training cycles and model exports.
 
 ### Phase 4: Self-Play Data Generation & Augmentation
 - **Multi-Game Orchestration**: Expand the batching manager to handle high-throughput self-play data generation by orchestrating multiple parallel games sharing the same global inference thread.
@@ -65,5 +67,5 @@ To build the C++ engine and run its unit tests (which require a system installat
 mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ../engine
 make -j$(nproc)
-./engine_tests
+./gomoku_engine_test
 ```

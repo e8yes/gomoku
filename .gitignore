@@ -82,3 +82,6 @@ Thumbs.db
 venv/
 model.pt
 __pycache__/
+
+# Test data
+test_data/
