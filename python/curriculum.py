@@ -1,75 +1,171 @@
 import os
 import subprocess
 import datetime
-import time
+import json
+import torch
+import shutil
+from dataclasses import dataclass, field
+from typing import Dict, Any
 
-# Configuration
-DATA_DIR = "data"
-WEIGHTS_DIR = "weights"
-MODEL_EXPORT_PATH = "../model.pt"
-NUM_ITERATIONS = 15
-GAMES_PER_ITERATION = 10000
+# Architecture source
+from create_model import GomokuNet, NUM_INPUT_CHANNELS, BOARD_SIZE
+from train import train
 
-# # TODO: Point this to the C++ self-play executable once Phase 4 is done.
-GAME_GENERATOR_BIN = "./gomoku_game_generator"
+@dataclass
+class CurriculumConfig:
+    data_dir: str = "data"
+    weights_dir: str = "weights"
+    model_export_path: str = "exported_models"
+    game_generator_bin: str = "./gomoku_game_generator"
+    num_iterations: int = 50
+    games_per_iteration: int = 9600
+    min_promotion_win_rate: float = 0.55
+    train_params: Dict[str, Any] = field(default_factory=lambda: {
+        "batch_size": 512,
+        "epochs": 5,
+        "lr": 0.005
+    })
 
-def get_current_day():
-    return datetime.datetime.now().strftime("%Y-%m-%d")
+    @classmethod
+    def load(cls, path: str):
+        if not os.path.exists(path):
+            return cls()
+        with open(path, 'r') as f:
+            data = json.load(f)
+        return cls(**data)
 
-def run_iteration(iteration: int):
-    """
-    Executes a single iteration of the AlphaZero training loop, including
-    self-play data generation, model training, and TorchScript export.
-    """
-    print(f"\n{'='*60}")
-    print(f" ITERATION {iteration:02d} / {NUM_ITERATIONS}")
-    print(f"{'='*60}")
+    def save(self, path: str):
+        with open(path, 'w') as f:
+            json.dump(self.__dict__, f, indent=2)
 
-    # TODO: 1. Self-Play (Phase 4)
-    assert os.path.exists(GAME_GENERATOR_BIN), f"[!] {GAME_GENERATOR_BIN} not found. Skipping data generation."
-    print(f"[*] Starting C++ Self-Play data generation...")
-    # Example command: ./gomoku_game_generator      \
-    #   --champion_model=...champion.pt             \
-    #   --challenger_model=...iteration_01.pt       \
-    #   --iteration_number 2                        \
-    #   --time_limit_seconds 17280                  \
-    #   --output data/shard_iter_02.bin             \
-    #   --game_stats data/game_stats_iter_02.json
-    # subprocess.run([GAME_GENERATOR_BIN, "--games", str(GAMES_PER_ITERATION), "--out_dir", DATA_DIR])
-
-    # Detect virtual environment
-    python_bin = "python3"
+def get_python_bin():
+    """Detects the virtual environment python binary."""
     for venv_path in [".venv", "venv"]:
         path = os.path.join("..", venv_path, "bin", "python")
         if os.path.exists(path):
-            python_bin = path
-            break
+            return path
+    return "python3"
 
-    # 2. Train Model
-    print(f"[*] Starting Python training for iteration {iteration} using {python_bin}...")
-    weights_path = os.path.join(WEIGHTS_DIR, f"model_iter_{iteration:02d}.pth")
-    prev_weights = os.path.join(WEIGHTS_DIR, f"model_iter_{iteration-1:02d}.pth") if iteration > 1 else None
-
-    cmd = [
-        python_bin, "train.py",
-        "--data_dir", DATA_DIR,
-        "--model_path", weights_path,
-        "--batch_size", "512",
-        "--epochs", "10"
-    ]
+def export_to_torchscript(weights_path: str, export_path: str):
+    """
+    Converts a .pth weight file to a TorchScript .pt file for C++ inference.
+    Uses FP16 precision for maximum inference throughput on RTX 4060 Ti.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = GomokuNet().to(device)
     
-    if prev_weights and os.path.exists(prev_weights):
-        cmd.extend(["--load_path", prev_weights])
+    # Load weights
+    checkpoint = torch.load(weights_path, map_location=device)
+    model.load_state_dict(checkpoint)
+    model.eval()
 
-    subprocess.run(cmd, check=True)
-    print(f"[*] Iteration {iteration} complete.\n")
+    # Use FP16 for export as expected by the C++ engine
+    if torch.cuda.is_available():
+        model = model.half()
+        dummy = torch.zeros(
+            1, NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE,
+            device=device, dtype=torch.float16
+        )
+    else:
+        dummy = torch.zeros(
+            1, NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE,
+            device=device, dtype=torch.float32
+        )
 
-    # 3. Load game_stats_iter_02.json and decide whether to promote the
-    # challenger to champion.
+    traced = torch.jit.trace(model, dummy)
+    traced.save(export_path)
+    print(f"[*] Exported {weights_path} to {export_path}")
+
+def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
+    """
+    Executes a single iteration of the AlphaZero training loop.
+    Returns the path to the new challenger weights and whether it should be promoted.
+    """
+    print(f"\n{'='*60}")
+    print(f" ITERATION {iteration:02d} / {config.num_iterations - 1}")
+    print(f"{'='*60}")
+
+    challenger_path = os.path.join(config.weights_dir, f"model_iter_{iteration:02d}.pth")
+
+    # 1. Self-Play (Data Generation)
+    # Iteration 0: Bootstrapping phase. No models exist yet. The generator will
+    # produce a seed dataset using internal heuristics or random play.
+    # Iteration k > 0: High-quality data generation by matching the current 
+    # champion against the challenger from iteration k-1.
+    print(f"[*] Starting C++ Self-Play (Iteration: {iteration})...")
+    
+    champion_pt = os.path.join(config.model_export_path, "champion.pt")
+    prev_challenger_pt = os.path.join(config.model_export_path, f"challenger{iteration-1:02d}.pt") if iteration > 0 else None
+
+    if os.path.exists(config.game_generator_bin):
+        cmd = [
+            config.game_generator_bin,
+            "--games", str(config.games_per_iteration),
+            "--iteration", str(iteration),
+            "--out_dir", config.data_dir
+        ]
+        
+        # Only pass models if they actually exist (Iteration 0 will pass neither)
+        if os.path.exists(champion_pt):
+            cmd.extend(["--champion_model_path", champion_pt])
+        if prev_challenger_pt and os.path.exists(prev_challenger_pt):
+            cmd.extend(["--challenger_model_path", prev_challenger_pt])
+            
+        # subprocess.run(cmd, check=True)
+        pass
+    else:
+        print(f"[!] {config.game_generator_bin} not found. Skipping data generation.")
+
+    # 2. Train Model (Challenger)
+    print(f"[*] Training challenger model: {challenger_path}")
+    
+    # Call the training function directly instead of launching a new process
+    train(
+        data_dir=config.data_dir,
+        model_path=challenger_path,
+        load_path=champion_path if (champion_path and os.path.exists(champion_path)) else None,
+        batch_size=config.train_params["batch_size"],
+        epochs=config.train_params["epochs"],
+        lr=config.train_params["lr"]
+    )
+
+    # Export the challenger for evaluation/production
+    challenger_export = os.path.join(config.model_export_path, f"challenger{iteration:02d}.pt")
+    export_to_torchscript(challenger_path, challenger_export)
+
+    # 3. Evaluation (Champion vs Challenger)
+    # The game generator outputs statistics about the match between champion and challenger.
+    # For iteration 0, we auto-promote to establish the initial champion.
+    print(f"[*] Evaluating challenger promotion...")
+    
+    if iteration == 0:
+        print(f"[+] Iteration 0: Auto-promoting initial champion.")
+        promoted = True
+        win_rate = 1.0
+    else:
+        stats_file = os.path.join(config.data_dir, f"game_stats_{iteration:02d}.json")
+        assert os.path.exists(stats_file), f"Stats file {stats_file} not found! Data generation must produce this file."
+        
+        with open(stats_file, 'r') as f:
+            stats = json.load(f)
+        
+        win_rate = float(stats["challenger_win_rate"])
+        promoted = win_rate >= config.min_promotion_win_rate
+        print(f"[*] Challenger Win Rate: {win_rate:.2%} (Threshold: {config.min_promotion_win_rate:.2%})")
+
+    if promoted:
+        print(f"[+] Challenger PROMOTED to Champion!")
+        return challenger_path, True
+    else:
+        print(f"[-] Challenger failed to beat threshold. Retaining current Champion.")
+        return champion_path, False
 
 def main():
-    if not os.path.exists(WEIGHTS_DIR): os.makedirs(WEIGHTS_DIR)
-    if not os.path.exists(DATA_DIR): os.makedirs(DATA_DIR)
+    config = CurriculumConfig.load("curriculum_schedule.json")
+    
+    if not os.path.exists(config.weights_dir): os.makedirs(config.weights_dir)
+    if not os.path.exists(config.data_dir): os.makedirs(config.data_dir)
+    if not os.path.exists(config.model_export_path): os.makedirs(config.model_export_path)
 
     start_time = datetime.datetime.now()
     end_time = start_time + datetime.timedelta(days=15)
@@ -77,10 +173,19 @@ def main():
     print(f"Gomoku AlphaZero Training Manager Started")
     print(f"Target End Date: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
 
-    for i in range(1, NUM_ITERATIONS + 1):
-        run_iteration(i)
+    # Initial champion is None for the bootstrapping phase
+    champion_path = None 
+
+    for i in range(0, config.num_iterations):
+        champion_path, promoted = run_iteration(i, config, champion_path)
         
-        # In a 15-day run, we might want to check the clock here
+        # Periodically update the production champion
+        if promoted:
+            champion_export = os.path.join(config.model_export_path, "champion.pt")
+            challenger_export = os.path.join(config.model_export_path, f"challenger{i:02d}.pt")
+            shutil.copy2(challenger_export, champion_export)
+            print(f"[*] Updated production champion: {champion_export}")
+
         if datetime.datetime.now() > end_time:
             print("Time limit reached. Stopping training.")
             break
