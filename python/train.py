@@ -7,6 +7,7 @@ from tqdm import tqdm
 import argparse
 import logging
 import datetime
+import json
 from typing import Tuple
 
 # Architecture source
@@ -118,6 +119,18 @@ def _evaluate_model(
     avg_v_loss = total_v_loss / num_eval_batches
     return avg_pi_loss, avg_v_loss
 
+def _save_training_stats(model_path: str, policy_loss: float, value_loss: float):
+    """
+    Saves the evaluation losses to a JSON file alongside the model weights.
+    """
+    stats_path = os.path.splitext(model_path)[0] + ".json"
+    with open(stats_path, "w") as f:
+        json.dump({
+            "policy_loss": policy_loss,
+            "value_loss": value_loss
+        }, f, indent=2)
+    logging.info(f"Training stats saved to {stats_path}")
+
 def train(
     data_dir: str,
     model_path: str,
@@ -199,6 +212,10 @@ def train(
     # 6. Evaluation (Sample 100 batches)
     avg_pi_loss, avg_v_loss = _evaluate_model(model, loader, device, num_batches=100)
     logging.info(f"Validation Loss - Policy: {avg_pi_loss:.4f}, Value: {avg_v_loss:.4f}")
+
+    # 7. Save Stats
+    _save_training_stats(model_path, avg_pi_loss, avg_v_loss)
+
     return avg_pi_loss, avg_v_loss
 
 if __name__ == "__main__":
