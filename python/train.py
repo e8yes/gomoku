@@ -5,12 +5,33 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 import argparse
+import logging
+import datetime
+from typing import Tuple
 
 # Architecture source
 from create_model import GomokuNet, NUM_INPUT_CHANNELS, BOARD_SIZE, NUM_ACTIONS
 
 # Dataset
 from cumulative_dataset import GomokuDataset
+
+def setup_logging():
+    """Sets up logging to both console and a timestamped file."""
+    if not os.path.exists("logs"):
+        os.makedirs("logs")
+    
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = os.path.join("logs", f"train_{timestamp}.log")
+    
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler()
+        ]
+    )
+    logging.info(f"Logging initialized. File: {log_file}")
 
 def _train_epoch(
     model: nn.Module,
@@ -55,6 +76,48 @@ def _train_epoch(
             "v": f"{value_loss.item():.4f}"
         })
 
+def _evaluate_model(
+    model: nn.Module,
+    loader: DataLoader,
+    device: torch.device,
+    num_batches: int = 100
+) -> Tuple[float, float]:
+    """
+    Computes average policy and value loss over a sample of batches.
+    """
+    model.eval()
+    total_pi_loss = 0.0
+    total_v_loss = 0.0
+    num_eval_batches = min(num_batches, len(loader))
+    
+    if num_eval_batches == 0:
+        return 0.0, 0.0
+
+    logging.info(f"Evaluating on {num_eval_batches} batches...")
+    with torch.no_grad():
+        eval_iter = iter(loader)
+        for _ in range(num_eval_batches):
+            try:
+                states, target_probs, target_values = next(eval_iter)
+            except StopIteration:
+                break
+            
+            states = states.to(device)
+            target_probs = target_probs.to(device)
+            target_values = target_values.to(device)
+
+            out_probs, out_values = model(states)
+            
+            pi_loss = nn.functional.cross_entropy(out_probs, target_probs)
+            v_loss = nn.functional.mse_loss(out_values, target_values)
+
+            total_pi_loss += pi_loss.item()
+            total_v_loss += v_loss.item()
+
+    avg_pi_loss = total_pi_loss / num_eval_batches
+    avg_v_loss = total_v_loss / num_eval_batches
+    return avg_pi_loss, avg_v_loss
+
 def train(
     data_dir: str,
     model_path: str,
@@ -62,7 +125,7 @@ def train(
     batch_size: int = 256,
     epochs: int = 5,
     lr: float = 1e-3,
-):
+) -> Tuple[float, float]:
     """
     Trains the Gomoku neural network using a ResNet architecture and the 
     cumulative dataset generated from self-play.
@@ -73,16 +136,19 @@ def train(
         batch_size (int): Number of samples per training batch.
         epochs (int): Number of full passes over the dataset.
         lr (float): Maximum learning rate for the OneCycleLR scheduler.
+
+    Returns:
+        Tuple[float, float]: Average (policy_loss, value_loss) over 100 sampled batches.
     """
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Training on {device} in pure bfloat16...")
+    logging.info(f"Training on {device} in pure bfloat16...")
 
     # 1. Load Dataset
     dataset = GomokuDataset(data_dir, augment=True)
     if len(dataset) == 0:
-        print("Error: No data found in", data_dir)
-        return
+        logging.error(f"No data found in {data_dir}")
+        return 0.0, 0.0
 
     loader = DataLoader(
         dataset, 
@@ -98,11 +164,11 @@ def train(
     # Load existing weights if available
     effective_load_path = load_path if load_path else model_path
     if effective_load_path and os.path.exists(effective_load_path):
-        print(f"Loading weights from {effective_load_path}")
+        logging.info(f"Loading weights from {effective_load_path}")
         # Note: If weights were saved as float32, we may need to cast
         model.load_state_dict(torch.load(effective_load_path, map_location=device))
     elif load_path:
-        print(f"Warning: load_path {load_path} specified but not found.")
+        logging.warning(f"load_path {load_path} specified but not found.")
 
     # 3. Optimizer & Scheduler
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
@@ -128,7 +194,12 @@ def train(
 
     # 5. Save Weights
     torch.save(model.state_dict(), model_path)
-    print(f"Model saved to {model_path}")
+    logging.info(f"Model saved to {model_path}")
+
+    # 6. Evaluation (Sample 100 batches)
+    avg_pi_loss, avg_v_loss = _evaluate_model(model, loader, device, num_batches=100)
+    logging.info(f"Validation Loss - Policy: {avg_pi_loss:.4f}, Value: {avg_v_loss:.4f}")
+    return avg_pi_loss, avg_v_loss
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -140,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-3)
     
     args = parser.parse_args()
+    setup_logging()
     train(
         data_dir=args.data_dir,
         model_path=args.model_path,
