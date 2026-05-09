@@ -24,19 +24,22 @@ torch::Tensor BoardToTensor(const Board& board);
 //   - Submit the tensor to the shared executor and block until evaluated.
 //   - Decode the raw model output (policy logits + value) into an
 //     EvaluationResult, applying illegal-move masking before softmax.
-//
-// Board encoding — 4 feature planes (kNumInputChannels = 4):
+// Board encoding — 9 feature planes (kNumInputChannels = 9):
 //   [0] Current player's stones  (1.0 where stone present, else 0.0)
 //   [1] Opponent's stones        (1.0 where stone present, else 0.0)
 //   [2] Constant 1.0 if current player is Black, else 0.0
 //   [3] Constant 1.0 if current player is White, else 0.0
-//
+//   [4] Constant 1.0 if Phase == kPlaceInitialThree, else 0.0
+//   [5] Constant 1.0 if Phase == kSwap2Decision, else 0.0
+//   [6] Constant 1.0 if Phase == kSwap2PlaceTwo, else 0.0
+//   [7] Constant 1.0 if Phase == kChooseColor, else 0.0
+//   [8] Constant 1.0 if Phase == kStandard, else 0.0
 // The executor is shared: one BatchInferenceExecutor can be handed to many
 // NeuralNetEvaluator instances across concurrent game threads so that MCTS
 // leaf evaluations from all games coalesce into the same GPU batches.
 class NeuralNetEvaluator : public Evaluator {
  public:
-  static constexpr int kNumInputChannels = 4;
+  static constexpr int kNumInputChannels = 9;
 
   explicit NeuralNetEvaluator(std::shared_ptr<BatchInferenceExecutor> executor);
 

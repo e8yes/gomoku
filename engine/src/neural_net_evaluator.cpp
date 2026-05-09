@@ -16,10 +16,18 @@ torch::Tensor BoardToTensor(const Board& board) {
       {NeuralNetEvaluator::kNumInputChannels, Board::kSize, Board::kSize});
   auto acc = t.accessor<float, 3>();
 
-  const Player cur = board.stone_to_place();
+  const Player actual_cur = board.stone_to_place();
+  // Default to Black for first-person view if no stone is explicitly to be placed
+  const Player cur = (actual_cur != Player::kNone) ? actual_cur : Player::kBlack;
   const Player opp = (cur == Player::kBlack) ? Player::kWhite : Player::kBlack;
-  const float ch2_fill = (cur == Player::kBlack) ? 1.0f : 0.0f;
-  const float ch3_fill = (cur == Player::kWhite) ? 1.0f : 0.0f;
+  
+  const float ch2_fill = (actual_cur == Player::kBlack) ? 1.0f : 0.0f;
+  const float ch3_fill = (actual_cur == Player::kWhite) ? 1.0f : 0.0f;
+  const float ch4_fill = (board.phase() == Phase::kPlaceInitialThree) ? 1.0f : 0.0f;
+  const float ch5_fill = (board.phase() == Phase::kSwap2Decision) ? 1.0f : 0.0f;
+  const float ch6_fill = (board.phase() == Phase::kSwap2PlaceTwo) ? 1.0f : 0.0f;
+  const float ch7_fill = (board.phase() == Phase::kChooseColor) ? 1.0f : 0.0f;
+  const float ch8_fill = (board.phase() == Phase::kStandard) ? 1.0f : 0.0f;
 
   for (int y = 0; y < Board::kSize; ++y) {
     for (int x = 0; x < Board::kSize; ++x) {
@@ -28,6 +36,11 @@ torch::Tensor BoardToTensor(const Board& board) {
       if (cell == opp) acc[1][y][x] = 1.0f;
       acc[2][y][x] = ch2_fill;
       acc[3][y][x] = ch3_fill;
+      acc[4][y][x] = ch4_fill;
+      acc[5][y][x] = ch5_fill;
+      acc[6][y][x] = ch6_fill;
+      acc[7][y][x] = ch7_fill;
+      acc[8][y][x] = ch8_fill;
     }
   }
   return t;

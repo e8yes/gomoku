@@ -13,19 +13,20 @@ Model I/O contract (must match NeuralNetEvaluator / BatchInferenceExecutor):
         value          float32 [batch, 1],      # tanh-bounded scalar in [-1, 1]
     )
 
-Architecture: 10-block SE-ResNet, 128 filters.
-Designed for the RTX 4060 Ti (Ada Lovelace, 8/16 GB VRAM):
-  - 10 residual blocks × 128 filters covers the full 15×15 board receptive field.
-  - Squeeze-Excitation (SE) attention in each block re-weights channels via global
-    context at negligible compute cost; empirically improves tactical sharpness.
-  - Value head uses a 256-unit FC bottleneck (vs AlphaZero's 256 for 19×19 Go).
-  - Exported via torch.jit.trace for zero-overhead loading in LibTorch (C++).
-  - During Python self-play / training (Phase 3) wrap with torch.compile() and
-    torch.autocast("cuda") for ~2× throughput via tensor cores and fused kernels.
-
-VRAM estimates (FP32, RTX 4060 Ti):
-    batch=256  →  ~2.5 GB   (~3,500 inferences/sec)
-    batch=512  →  ~4.5 GB   (~5,500 inferences/sec)
+# Architecture: 15-block SE-ResNet, 256 filters.
+# Designed for the RTX 4060 Ti (Ada Lovelace, 8/16 GB VRAM):
+#   - 15 residual blocks × 256 filters provides deeper tactical calculation and 
+#     significantly more feature capacity than the original 10x128 design.
+#   - Squeeze-Excitation (SE) attention in each block re-weights channels via global
+#     context at negligible compute cost; empirically improves tactical sharpness.
+#   - Value head uses a 256-unit FC bottleneck.
+#   - Exported via torch.jit.trace for zero-overhead loading in LibTorch (C++).
+#   - During Python self-play / training (Phase 3) wrap with torch.compile() and
+#     torch.autocast("cuda") for high throughput via tensor cores and fused kernels.
+#
+# VRAM estimates (FP32, RTX 4060 Ti with 15x256):
+#     batch=256  →  ~4.0 GB 
+#     batch=512  →  ~7.0 GB
 """
 
 import torch
@@ -39,6 +40,11 @@ from torchsummary import summary
 #   Ch 1 — Opponent's stones       (1.0 where present, else 0.0)
 #   Ch 2 — Constant 1.0 if the current player is Black, else 0.0
 #   Ch 3 — Constant 1.0 if the current player is White, else 0.0
+#   Ch 4 — Constant 1.0 if Phase == kPlaceInitialThree, else 0.0
+#   Ch 5 — Constant 1.0 if Phase == kSwap2Decision, else 0.0
+#   Ch 6 — Constant 1.0 if Phase == kSwap2PlaceTwo, else 0.0
+#   Ch 7 — Constant 1.0 if Phase == kChooseColor, else 0.0
+#   Ch 8 — Constant 1.0 if Phase == kStandard, else 0.0
 #
 # Rationale:
 #   Channels 0 & 1 give the network a consistent first-person view of the
@@ -52,14 +58,21 @@ from torchsummary import summary
 #     - whose long-term positional advantage is larger (Black typically has a
 #       stronger first-move advantage in Gomoku);
 #     - which side is subject to the exact-five rule (overlines don't win).
+#
+#   Channels 4-8 are "phase" indicator planes. In Swap2, the game progresses
+#   through several distinct phases (placing initial stones, deciding to swap,
+#   placing two more stones, etc.). The legal actions and strategy depend heavily
+#   on the current phase. By using explicit scalar planes, the network can condition
+#   its predictions on the current Swap2 state.
+#
 #   Constant planes (all 0s or all 1s) are the standard AlphaZero approach
 #   for injecting scalar game-state information into the convolutional stream.
-NUM_INPUT_CHANNELS = 4   # total input channels; see layout above
+NUM_INPUT_CHANNELS = 9   # total input channels; see layout above
 BOARD_SIZE = 15
 NUM_ACTIONS = 230        # must match Board::kNumActions (225 cells + 5 Swap2)
 
-NUM_FILTERS = 128
-NUM_BLOCKS  = 10
+NUM_FILTERS = 256
+NUM_BLOCKS  = 15
 SE_RATIO    = 4          # SE bottleneck: filters // SE_RATIO channels
 
 
