@@ -17,9 +17,8 @@ def get_current_day():
     return datetime.datetime.now().strftime("%Y-%m-%d")
 
 def run_iteration(iteration):
-    horizon = 2 * iteration
     print(f"\n{'='*60}")
-    print(f" ITERATION {iteration:02d} / {NUM_ITERATIONS} | Horizon: {horizon} moves")
+    print(f" ITERATION {iteration:02d} / {NUM_ITERATIONS}")
     print(f"{'='*60}")
 
     # 1. Self-Play (Phase 4)
@@ -30,16 +29,22 @@ def run_iteration(iteration):
     else:
         print(f"[!] # TODO: SELF_PLAY_BIN ({SELF_PLAY_BIN}) not found. Skipping data generation.")
 
-    # 2. Training (Phase 3)
-    print(f"[*] Starting Python training for iteration {iteration}...")
+    # Detect virtual environment
+    python_bin = "python3"
+    for venv_path in [".venv", "venv"]:
+        path = os.path.join("..", venv_path, "bin", "python")
+        if os.path.exists(path):
+            python_bin = path
+            break
+
+    print(f"[*] Starting Python training for iteration {iteration} using {python_bin}...")
     weights_path = os.path.join(WEIGHTS_DIR, f"model_iter_{iteration:02d}.pth")
     prev_weights = os.path.join(WEIGHTS_DIR, f"model_iter_{iteration-1:02d}.pth") if iteration > 1 else "none"
     
     cmd = [
-        "python", "train.py",
+        python_bin, "train.py",
         "--data_dir", DATA_DIR,
         "--model_path", weights_path,
-        "--horizon", str(horizon),
         "--batch_size", "512",
         "--epochs", "10"
     ]

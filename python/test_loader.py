@@ -22,52 +22,52 @@ def test_binary_roundtrip():
         
     shard_path = os.path.join(data_dir, "test_shard.bin")
     
-    # 1. Generate a mock game
-    num_moves = 30
-    winner = 1.0 # Black wins
+    # 1. Generate mock samples
+    num_samples = 10
     
     # Create random states (9 channels, 15x15)
-    states = np.random.randint(0, 2, (num_moves, 9, 15, 15)).astype(np.uint8)
-    packed_states = pack_game_states(states)
+    states = np.random.randint(0, 2, (num_samples, 9, 15, 15)).astype(np.uint8)
+    packed_states = pack_game_states(states) # [num_samples, 254]
     
     # Random probs (float16)
-    probs = np.random.rand(num_moves, 230).astype(np.float16)
+    probs = np.random.rand(num_samples, 230).astype(np.float16)
     
-    # Write to file
+    # Values (float16)
+    values = np.random.uniform(-1, 1, num_samples).astype(np.float16)
+    
+    # Write to file in flat format
     with open(shard_path, "wb") as f:
-        # Header: i32, f32
-        f.write(struct.pack("<if", num_moves, winner))
-        # States: num_moves * 254
-        f.write(packed_states.tobytes())
-        # Probs: num_moves * 230 * 2
-        f.write(probs.tobytes())
-        
-    print(f"Created dummy shard with 1 game, {num_moves} moves.")
+        for i in range(num_samples):
+            f.write(packed_states[i].tobytes())
+            f.write(probs[i].tobytes())
+            f.write(values[i].tobytes())
+            
+    print(f"Created flat dummy shard with {num_samples} samples.")
 
     # 2. Load with GomokuDataset
-    # Horizon = 5: should only get last 5 moves
-    dataset = GomokuDataset(data_dir, horizon=5, augment=False)
+    dataset = GomokuDataset(data_dir, augment=False)
     
-    print(f"Dataset size: {len(dataset)} samples (Expected: 5)")
-    assert len(dataset) == 5, f"Expected 5 samples, got {len(dataset)}"
+    print(f"Dataset size: {len(dataset)} samples (Expected: 10)")
+    assert len(dataset) == 10, f"Expected 10 samples, got {len(dataset)}"
     
-    # Verify last move
-    state_tensor, prob_tensor, val_tensor = dataset[4]
+    # Verify a specific sample (e.g. index 3, which corresponds to original index 3)
+    state_tensor, prob_tensor, val_tensor = dataset[3]
     
-    # Compare value
-    assert val_tensor.item() == winner, f"Expected value {winner}, got {val_tensor.item()}"
+    # Compare value (with tolerance for bfloat16 precision loss)
+    expected_value = values[3]
+    np.testing.assert_allclose(val_tensor.item(), expected_value, atol=1e-2)
     
-    # Compare state (unpacking logic)
-    expected_state = states[-1].astype(np.float32)
+    # Compare state
+    expected_state = states[3].astype(np.float32)
     actual_state = state_tensor.float().numpy()
     np.testing.assert_array_almost_equal(actual_state, expected_state)
     
-    # Compare prob
-    expected_prob = probs[-1].astype(np.float32)
+    # Compare prob (with tolerance for bfloat16 precision loss)
+    expected_prob = probs[3].astype(np.float32)
     actual_prob = prob_tensor.float().numpy()
-    np.testing.assert_array_almost_equal(actual_prob, expected_prob, decimal=3)
+    np.testing.assert_allclose(actual_prob, expected_prob, atol=1e-2)
 
-    print("Binary Roundtrip Test PASSED!")
+    print("Binary Roundtrip Test (Flat Format) PASSED!")
     
     # Cleanup
     os.remove(shard_path)

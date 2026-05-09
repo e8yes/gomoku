@@ -17,7 +17,7 @@ def train(args):
     print(f"Training on {device} in pure bfloat16...")
 
     # 1. Load Dataset
-    dataset = GomokuDataset(args.data_dir, horizon=args.horizon, augment=True)
+    dataset = GomokuDataset(args.data_dir, augment=True)
     if len(dataset) == 0:
         print("Error: No data found in", args.data_dir)
         return
@@ -90,7 +90,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="data")
     parser.add_argument("--model_path", type=str, default="weights.pth")
-    parser.add_argument("--horizon", type=int, default=2)
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-3)
