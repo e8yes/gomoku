@@ -67,5 +67,5 @@ To build the C++ engine and run its unit tests (which require a system installat
 mkdir -p build && cd build
 cmake -DCMAKE_BUILD_TYPE=Release ../engine
 make -j$(nproc)
-./engine_tests
+./gomoku_engine_test
 ```

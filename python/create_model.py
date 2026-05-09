@@ -71,7 +71,7 @@ NUM_INPUT_CHANNELS = 9   # total input channels; see layout above
 BOARD_SIZE = 15
 NUM_ACTIONS = 230        # must match Board::kNumActions (225 cells + 5 Swap2)
 
-NUM_FILTERS = 256
+NUM_FILTERS = 144
 NUM_BLOCKS  = 15
 SE_RATIO    = 4          # SE bottleneck: filters // SE_RATIO channels
 
