@@ -173,10 +173,6 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
         win_rate = 1.0
     else:
         stats_file = os.path.join(temp_data_dir, f"game_stats_{iteration:02d}.json")
-        if not os.path.exists(stats_file):
-            # If not in temp, maybe it was iteration 0 and moved?
-            stats_file = os.path.join(config.data_dir, f"game_stats_{iteration:02d}.json")
-            
         assert os.path.exists(stats_file), f"Stats file {stats_file} not found! Data generation must produce this file."
         
         with open(stats_file, 'r') as f:
