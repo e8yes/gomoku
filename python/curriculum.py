@@ -21,6 +21,7 @@ class CurriculumConfig:
     num_iterations: int = 50
     games_per_iteration: int = 9000
     min_promotion_win_rate: float = 0.55
+    diagnostics_dir: str = "diagnostics"
     train_params: Dict[str, Any] = field(default_factory=lambda: {
         "batch_size": 512,
         "epochs": 1,
@@ -116,12 +117,16 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
     champion_pt = os.path.join(config.model_export_path, "champion.pt")
     prev_challenger_pt = os.path.join(config.model_export_path, f"challenger{iteration-1:02d}.pt") if iteration > 0 else None
 
+    temp_data_dir = os.path.join(config.data_dir, f"temp_iter_{iteration:02d}")
+    if not os.path.exists(temp_data_dir):
+        os.makedirs(temp_data_dir)
+
     if os.path.exists(config.game_generator_bin):
         cmd = [
             config.game_generator_bin,
             "--games", str(config.games_per_iteration),
             "--iteration", str(iteration),
-            "--out_dir", config.data_dir
+            "--out_dir", temp_data_dir
         ]
         
         # Only pass models if they actually exist (Iteration 0 will pass neither)
@@ -133,6 +138,12 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
         subprocess.run(cmd, check=True)
     else:
         logging.warning(f"{config.game_generator_bin} not found. Skipping data generation.")
+
+    # Special case for Iteration 0: The seed data must be available for training immediately.
+    if iteration == 0:
+        logging.info("[*] Iteration 0: Moving seed data to cumulative data_dir.")
+        for f in os.listdir(temp_data_dir):
+            shutil.move(os.path.join(temp_data_dir, f), os.path.join(config.data_dir, f))
 
     # 2. Train Model (Challenger)
     logging.info(f"[*] Training challenger model: {challenger_path}")
@@ -161,7 +172,11 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
         promoted = True
         win_rate = 1.0
     else:
-        stats_file = os.path.join(config.data_dir, f"game_stats_{iteration:02d}.json")
+        stats_file = os.path.join(temp_data_dir, f"game_stats_{iteration:02d}.json")
+        if not os.path.exists(stats_file):
+            # If not in temp, maybe it was iteration 0 and moved?
+            stats_file = os.path.join(config.data_dir, f"game_stats_{iteration:02d}.json")
+            
         assert os.path.exists(stats_file), f"Stats file {stats_file} not found! Data generation must produce this file."
         
         with open(stats_file, 'r') as f:
@@ -170,6 +185,20 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
         win_rate = float(stats["challenger_win_rate"])
         promoted = win_rate >= config.min_promotion_win_rate
         logging.info(f"[*] Challenger Win Rate: {win_rate:.2%} (Threshold: {config.min_promotion_win_rate:.2%})")
+
+    # Data Gating: Move data based on promotion result
+    if iteration > 0:
+        target_dir = config.data_dir if promoted else config.diagnostics_dir
+        if not os.path.exists(target_dir):
+            os.makedirs(target_dir)
+        
+        logging.info(f"[*] Gating data for iteration {iteration} to {target_dir}")
+        for f in os.listdir(temp_data_dir):
+            shutil.move(os.path.join(temp_data_dir, f), os.path.join(target_dir, f))
+    
+    # Clean up temp dir if it's empty
+    if os.path.exists(temp_data_dir) and not os.listdir(temp_data_dir):
+        os.rmdir(temp_data_dir)
 
     if promoted:
         logging.info(f"[+] Challenger PROMOTED to Champion!")
@@ -200,6 +229,7 @@ def main():
     
     if not os.path.exists(config.weights_dir): os.makedirs(config.weights_dir)
     if not os.path.exists(config.data_dir): os.makedirs(config.data_dir)
+    if not os.path.exists(config.diagnostics_dir): os.makedirs(config.diagnostics_dir)
     if not os.path.exists(config.model_export_path): os.makedirs(config.model_export_path)
 
     setup_logging()
