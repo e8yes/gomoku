@@ -4,11 +4,11 @@
   "model_export_path": "exported_models",
   "game_generator_bin": "./gomoku_game_generator",
   "num_iterations": 50,
-  "games_per_iteration": 9600,
+  "games_per_iteration": 9000,
   "min_promotion_win_rate": 0.55,
   "train_params": {
     "batch_size": 512,
-    "epochs": 5,
-    "lr": 0.005
+    "epochs": 1,
+    "lr": 0.002
   }
 }

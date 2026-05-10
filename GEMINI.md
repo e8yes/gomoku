@@ -11,13 +11,13 @@ This document outlines the development plan for our Gomoku engine with Swap2 sup
 
 ### 2.1 Curriculum Learning (Endgame First)
 Instead of keeping all moves from early random self-play (which is mostly noise), we will use an **incremental horizon strategy**:
-- **Iteration 1**: Only keep the final 1-2 moves of each self-play game. This trains the network on absolute tactical truths (immediate wins/losses).
-- **Subsequent Iterations**: Incrementally add ~2 more moves from the end of the game per iteration. By Iteration 15, we will be keeping nearly all moves.
-- **Benefit**: This acts as curriculum learning. The value network perfectly learns the endgame first, and as the horizon expands, it learns to accurately evaluate mid-game states that lead to those known endgames.
+- **Iteration 0**: Only keep the final 1 move of each self-play game and the re-labeled moves. This trains the network on absolute tactical truths (immediate wins/losses).
+- **Subsequent Iterations**: Incrementally add ~1 more move from the end of the game and the re-labeled moves per iteration. By Iteration 30, we will be keeping nearly all moves.
+- **Benefit**: This acts as curriculum learning. The value network perfectly learns the endgame first, and as the horizon expands, it learns to accurately evaluate mid-game states that lead to those known endgames. The early noisy board states serve as regularizers to prevent overfitting.
 
-### 2.2 Data Augmentation & Minimax Perturbation
+### 2.2 Data Augmentation & Re-labeling Perturbation
 - **Symmetries**: Every position generated will be augmented using the 8 dihedral symmetries (rotations and flips) of the Gomoku board.
-- **Minimax Perturbation**: To quickly bootstrap tactical knowledge in early iterations, we will retract a few moves from the endgame of self-play games and run a fast, shallow **Alpha-Beta/Minimax search** to find the exact tactical evaluations and forced sequences. These perfectly evaluated "perturbed" positions will be injected into the training data.
+- **Re-labeling Perturbation**: To quickly bootstrap tactical knowledge in early iterations, we will traverse from the endgame of self-play games all the way to just after the swap 2 opening. For each state, we run our pattern detection rules on the state to find relabeling opportunities. For those moves that we can't re-label, we use the original policy/value from the MCTS search.
 
 ## 3. MCTS Implementation Details
 
@@ -46,18 +46,38 @@ To maximize the throughput of the RTX 4060 Ti during self-play, the C++ engine w
 - **Parallel Tree Search Batching**: Implement the queuing mechanism to batch node evaluations from the multiple MCTS threads exploring the *single* game tree.
 
 ### Phase 3: Python Training Pipeline
-- **ResNet Implementation**: Build the PyTorch ResNet model (18M parameters) with SE-blocks.
+- **ResNet Implementation**: Build the PyTorch ResNet model (6M parameters) with SE-blocks.
 - **Cumulative Dataset Manager**: Implement a disk-backed storage system to store and index all self-play games from Iteration 1 to the end, preventing overfitting and ensuring tactical variety.
 - **Horizon-Filtered Data Loader**: Implement a PyTorch `Dataset` that samples moves from the cumulative store according to the incremental horizon strategy (Section 2.1).
 - **Iterative Training Loop**: Develop the orchestration script to manage training cycles and model exports.
 
-### Phase 4: Self-Play Data Generation & Augmentation
-- **Multi-Game Orchestration**: Expand the batching manager to handle high-throughput self-play data generation by orchestrating multiple parallel games sharing the same global inference thread.
-- **Data Augmentation**: Incorporate the data augmentation tricks mentioned in Section 2.2 (dihedral symmetries and Minimax perturbation).
-- **15-Day Run**: Start the iterative cycle of self-play and training using the Curriculum Learning (endgame first) strategy.
+### Phase 4: Data Seeding
+Create the `gomoku_game_generator` C++ executable. Upon iteration=0, we perform the data seeding process instead of self play. Read curriculum.py to understand the big picture.
+- Randomly play 40,000 games till end.
+- Keep the last move of each game. Write the (board, policy, value) training examples according to the format specified by cumulative_dataset.py.
+- Run re-labeling for the rest of the board states all the way back to just after the swap 2 opening move. The re-labeling heuristic is described in detail below.
 
-### Phase 5: Match Server Integration
-- **Server Client**: Build the `engine.py` wrapper using `gomoku_match.PlayerClient` to compete on the server.
+#### Re-labeling
+Re-labeling happens when we can prove the tactical truth of the endgame moves by the following simple rules executed in sequence.
+1. Depth 1 win:  Find positions (our stone) that will lead to win in 1 move. Policy on those positions are 1/N and value is 1. N is the number of such positions.
+2. Depth 1 draw: Find positions (our stone) that will lead to win in 1 move for either player. Policy on those positions are 1/N and value is 0. N is the number of such positions.
+3. Depth 2 defense:  Find positions (opponent's stone) that will lead to win in 1 move. Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
+4. Depth 3 win (open 4): Find positions (our stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. Value is 1. N is the number of such positions. Value is 1.
+5. Depth 3 draw (open 4 with overline potential): Find positions (our stone) that will form an open 4 with overline potential. Overline pattern: xxxx-x or x-xxxx (where x is our stone). Policy on those positions are 1/N and value is 0. N is the number of such positions.
+6. Depth 4 defense (open 4): Find positions (opponent's stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
+7. Depth 5 win (double open 3s): Find positions that form at least 2 open 3s (both of which have at least 3 empty neighbors on their directions and without overline potential). Policy on those positions are 1/N and value is 1. N is the number of such positions.
+8. Depth 5 draw (double open 3s with overline potential): Find positions that form at least 2 open 3s (both of which have at least 3 empty neighbors on their directions and at least one of them has overline potential). Overline pattern: xxx-xx or xx-xxx (where x is our stone). Policy on those positions are 1/N and value is 0. N is the number of such positions.
+9. Depth 6 defense (double open 3s): Find positions (opponent's stone) that will form at least 2 open 3s (both of which have at least 3 empty neighbors on their directions and without overline potential). Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
+
+### Phase 5: Self-Play Data Generation & Augmentation
+- **Multi-Game Orchestration** (`gomoku_game_generator` C++ executable): The program runs 12 game workers in parallel. Each worker is a self-play game (between the challenger and the champion) that uses MCTS with the neural network evaluator. The MCTS collects 16 board states at a time to form a batch to evaluate with the neural network. A total of 2000 simulations per move (roughly 60 ms per move). Having 12 workers in parallel doesn't increase the throughput by 12 but it is meant to saturate the GPU compute. For a 30-ply game, the throughput is expected to be 0.56 games per second or 2000 games per hour. It takes 4.5 hours to complete one iteration of 9000 games. Check curriculum.py for the commandline arguments for this program.
+- **Data Emission**: Check cumulative_dataset.py for the format of each (board, policy, value) training example. Per section 2.1 and 2.2, trim the game by the horizon limit and relabel them when possible. Re-labeling will be attempted for the rest of the game except of the swap 2 opening. If relabeling fails, then the game record is just discarded. The horizon limit is game_len - (iteration + 1) for iteration 0..50.
+- **10-Day Run**: Start the iterative cycle of self-play and training using the Curriculum Learning (endgame first) strategy.
+
+### Phase 6: Match Server Integration
+- **Server Client**: Build the gomoku engine client C++ executable that communicates with the match server and plays games. If we run two of the client program, we should be able to see them play games against each other via the spectator client in the `protocol/examples/spectator.py`.
+- **Communication Spec**: Adhere to the match server communication spec in `protocol/spec.md`. It is a JSON-RPC 2.0 protocol.
+ 
 
 ## 5. Building and Testing
 

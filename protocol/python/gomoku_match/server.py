@@ -85,7 +85,7 @@ class ServerError(RuntimeError):
 @dataclass(frozen=True)
 class MatchSettings:
     board_size: int = 15
-    deadline_ms_per_move: int = 5000
+    deadline_ms_per_move: int = 15000
     disconnect_grace_ms: int = 0
 
 

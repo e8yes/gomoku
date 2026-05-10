@@ -32,6 +32,7 @@ Model I/O contract (must match NeuralNetEvaluator / BatchInferenceExecutor):
 import torch
 import torch.nn as nn
 from torchsummary import summary
+import time
 
 # Input channel layout (must match NeuralNetEvaluator::kNumInputChannels and
 # the encoding in NeuralNetEvaluator::BoardToTensorImpl):
@@ -71,8 +72,8 @@ NUM_INPUT_CHANNELS = 9   # total input channels; see layout above
 BOARD_SIZE = 15
 NUM_ACTIONS = 230        # must match Board::kNumActions (225 cells + 5 Swap2)
 
-NUM_FILTERS = 144
-NUM_BLOCKS  = 15
+NUM_FILTERS = 128
+NUM_BLOCKS  = 5
 SE_RATIO    = 4          # SE bottleneck: filters // SE_RATIO channels
 
 
@@ -203,6 +204,19 @@ def main():
     # the forward pass and converts outputs back to float32 after; callers
     # (NeuralNetEvaluator) remain unaware of the precision used internally.
     model = GomokuNet().to(device).half().eval()
+
+    # Throughput test:
+    BATCH_SIZE = 192
+    
+    time_begin = time.time()
+    NUM_INFERENCE = 1000
+    for _ in range(NUM_INFERENCE):
+        batch = torch.ones(
+            BATCH_SIZE, NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE,
+            dtype=torch.float16) * 0.2345
+        model(batch.to(device))
+    time_end = time.time()
+    print(f"Average inference time: {(time_end - time_begin) * 1000 / (NUM_INFERENCE*BATCH_SIZE)} ms")
 
     # torch.jit.trace for LibTorch (C++) loading. Must trace in FP16 so the
     # exported model's internal dtypes match what RunBatch sends at inference.

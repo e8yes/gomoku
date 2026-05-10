@@ -577,7 +577,7 @@ observers must `subscribe`).
 {"jsonrpc":"2.0","method":"game_started","params":{
   "game_id": "g1",
   "players": {"A": "alice", "B": "bob"},
-  "settings": {"board_size":15,"deadline_ms_per_move":5000},
+  "settings": {"board_size":15,"deadline_ms_per_move":15000},
   "state": { ... initial board state ... }
 }}
 ```
@@ -588,7 +588,7 @@ observers must `subscribe`).
 {"jsonrpc":"2.0","method":"your_turn","params":{
   "game_id": "g1",
   "state": { ... full board state ... },
-  "deadline_ms": 5000
+  "deadline_ms": 15000
 }}
 ```
 
