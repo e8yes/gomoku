@@ -19,12 +19,12 @@ class CurriculumConfig:
     model_export_path: str = "exported_models"
     game_generator_bin: str = "./gomoku_game_generator"
     num_iterations: int = 50
-    games_per_iteration: int = 9600
+    games_per_iteration: int = 9000
     min_promotion_win_rate: float = 0.55
     train_params: Dict[str, Any] = field(default_factory=lambda: {
         "batch_size": 512,
-        "epochs": 5,
-        "lr": 0.005
+        "epochs": 1,
+        "lr": 0.002
     })
 
     @classmethod
@@ -130,8 +130,7 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
         if prev_challenger_pt and os.path.exists(prev_challenger_pt):
             cmd.extend(["--challenger_model_path", prev_challenger_pt])
             
-        # subprocess.run(cmd, check=True)
-        pass
+        subprocess.run(cmd, check=True)
     else:
         logging.warning(f"{config.game_generator_bin} not found. Skipping data generation.")
 

@@ -1,6 +1,6 @@
 # Gomoku Engine Development Plan (AlphaZero Approach)
 
-This document outlines the development plan for our Gomoku engine with Swap2 support, competing against Claude Code on the `gomoku_match` server. We are utilizing an **AlphaZero-style architecture (MCTS + Neural Network)** trained over 15 days on an RTX 4060 Ti.
+This document outlines the development plan for our Gomoku engine with Swap2 support, competing against Claude Code on the `gomoku_match` server. We are utilizing an **AlphaZero-style architecture (MCTS + Neural Network)** trained over 10 days on an RTX 4060 Ti.
 
 ## 1. Architecture: C++ Engine & Python Training
 
@@ -60,18 +60,14 @@ Create the `gomoku_game_generator` C++ executable. Upon iteration=0, we perform 
 #### Re-labeling
 Re-labeling happens when we can prove the tactical truth of the endgame moves by the following simple rules executed in sequence.
 1. Depth 1 win:  Find positions (our stone) that will lead to win in 1 move. Policy on those positions are 1/N and value is 1. N is the number of such positions.
-2. Depth 1 draw: Find positions (our stone) that will lead to win in 1 move for either player. Policy on those positions are 1/N and value is 0. N is the number of such positions.
-3. Depth 2 defense:  Find positions (opponent's stone) that will lead to win in 1 move. Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
-4. Depth 3 win (open 4): Find positions (our stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. Value is 1. N is the number of such positions. Value is 1.
-5. Depth 3 draw (open 4 with overline potential): Find positions (our stone) that will form an open 4 with overline potential. Overline pattern: xxxx-x or x-xxxx (where x is our stone). Policy on those positions are 1/N and value is 0. N is the number of such positions.
-6. Depth 4 defense (open 4): Find positions (opponent's stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
-7. Depth 5 win (double open 3s): Find positions that form at least 2 open 3s (both of which have at least 3 empty neighbors on their directions and without overline potential). Policy on those positions are 1/N and value is 1. N is the number of such positions.
-8. Depth 5 draw (double open 3s with overline potential): Find positions that form at least 2 open 3s (both of which have at least 3 empty neighbors on their directions and at least one of them has overline potential). Overline pattern: xxx-xx or xx-xxx (where x is our stone). Policy on those positions are 1/N and value is 0. N is the number of such positions.
-9. Depth 6 defense (double open 3s): Find positions (opponent's stone) that will form at least 2 open 3s (both of which have at least 3 empty neighbors on their directions and without overline potential). Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
+2. Depth 2 defense:  Find positions (opponent's stone) that will lead to win in 1 move. Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
+3. Depth 3 win (open 4): Find positions (our stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. Value is 1. N is the number of such positions.
+4. Depth 4 defense (open 4): Find positions (opponent's stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
 
 ### Phase 5: Self-Play Data Generation & Augmentation
 - **Multi-Game Orchestration** (`gomoku_game_generator` C++ executable): The program runs 12 game workers in parallel. Each worker is a self-play game (between the challenger and the champion) that uses MCTS with the neural network evaluator. The MCTS collects 16 board states at a time to form a batch to evaluate with the neural network. A total of 2000 simulations per move (roughly 60 ms per move). Having 12 workers in parallel doesn't increase the throughput by 12 but it is meant to saturate the GPU compute. For a 30-ply game, the throughput is expected to be 0.56 games per second or 2000 games per hour. It takes 4.5 hours to complete one iteration of 9000 games. Check curriculum.py for the commandline arguments for this program.
 - **Data Emission**: Check cumulative_dataset.py for the format of each (board, policy, value) training example. Per section 2.1 and 2.2, trim the game by the horizon limit and relabel them when possible. Re-labeling will be attempted for the rest of the game except of the swap 2 opening. If relabeling fails, then the game record is just discarded. The horizon limit is game_len - (iteration + 1) for iteration 0..50.
+- **Game Stats**: The game generator also outputs statistics about the match between the champion and the challenger. This information is stored in a JSON file that is used to determine whether the challenger should be promoted to champion (see curriculum.py).
 - **10-Day Run**: Start the iterative cycle of self-play and training using the Curriculum Learning (endgame first) strategy.
 
 ### Phase 6: Match Server Integration
