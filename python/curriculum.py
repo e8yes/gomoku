@@ -188,7 +188,7 @@ def run_iteration(iteration: int, config: CurriculumConfig, champion_path: str):
 
     # Data Gating: Move data based on promotion result
     if iteration > 0:
-        target_dir = config.data_dir if promoted else config.diagnostics_dir
+        target_dir = config.data_dir if promoted else os.path.join(config.diagnostics_dir, f"iter_{iteration:02d}")
         if not os.path.exists(target_dir):
             os.makedirs(target_dir)
         
