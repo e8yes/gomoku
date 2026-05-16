@@ -7,32 +7,19 @@ Run from the python/ directory:
     # → writes model.pt (copy to build/ before running neural_net_evaluator_tests)
 
 Model I/O contract (must match NeuralNetEvaluator / BatchInferenceExecutor):
-    Input:  float32 [batch, 4, 15, 15]
+    Input:  float32 [batch, 9, 15, 15]
     Output: tuple(
         policy_logits  float32 [batch, 230],   # raw logits; C++ applies masking+softmax
         value          float32 [batch, 1],      # tanh-bounded scalar in [-1, 1]
     )
-
-# Architecture: 15-block SE-ResNet, 256 filters.
-# Designed for the RTX 4060 Ti (Ada Lovelace, 8/16 GB VRAM):
-#   - 15 residual blocks × 256 filters provides deeper tactical calculation and 
-#     significantly more feature capacity than the original 10x128 design.
-#   - Squeeze-Excitation (SE) attention in each block re-weights channels via global
-#     context at negligible compute cost; empirically improves tactical sharpness.
-#   - Value head uses a 256-unit FC bottleneck.
-#   - Exported via torch.jit.trace for zero-overhead loading in LibTorch (C++).
-#   - During Python self-play / training (Phase 3) wrap with torch.compile() and
-#     torch.autocast("cuda") for high throughput via tensor cores and fused kernels.
-#
-# VRAM estimates (FP32, RTX 4060 Ti with 15x256):
-#     batch=256  →  ~4.0 GB 
-#     batch=512  →  ~7.0 GB
 """
+
+import argparse
+import time
 
 import torch
 import torch.nn as nn
 from torchsummary import summary
-import time
 
 # Input channel layout (must match NeuralNetEvaluator::kNumInputChannels and
 # the encoding in NeuralNetEvaluator::BoardToTensorImpl):
@@ -65,21 +52,20 @@ import time
 #   placing two more stones, etc.). The legal actions and strategy depend heavily
 #   on the current phase. By using explicit scalar planes, the network can condition
 #   its predictions on the current Swap2 state.
-#
-#   Constant planes (all 0s or all 1s) are the standard AlphaZero approach
-#   for injecting scalar game-state information into the convolutional stream.
-NUM_INPUT_CHANNELS = 9   # total input channels; see layout above
+
+NUM_INPUT_CHANNELS = 9  # total input channels; see layout above
 BOARD_SIZE = 15
-NUM_ACTIONS = 230        # must match Board::kNumActions (225 cells + 5 Swap2)
+NUM_ACTIONS = 230  # must match Board::kNumActions (225 cells + 5 Swap2)
 
 NUM_FILTERS = 128
-NUM_BLOCKS  = 5
-SE_RATIO    = 4          # SE bottleneck: filters // SE_RATIO channels
+NUM_BLOCKS = 5
+SE_RATIO = 4  # SE bottleneck: filters // SE_RATIO channels
 
 
 # ---------------------------------------------------------------------------
 # Building blocks
 # ---------------------------------------------------------------------------
+
 
 class SELayer(nn.Module):
     """Squeeze-Excitation channel attention.
@@ -92,8 +78,8 @@ class SELayer(nn.Module):
         super().__init__()
         squeezed = max(channels // ratio, 1)
         self.pool = nn.AdaptiveAvgPool2d(1)
-        self.fc1  = nn.Linear(channels, squeezed)
-        self.fc2  = nn.Linear(squeezed, channels)
+        self.fc1 = nn.Linear(channels, squeezed)
+        self.fc2 = nn.Linear(squeezed, channels)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b, c, _, _ = x.shape
@@ -112,10 +98,10 @@ class ResBlock(nn.Module):
     def __init__(self, filters: int):
         super().__init__()
         self.conv1 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
-        self.bn1   = nn.BatchNorm2d(filters)
+        self.bn1 = nn.BatchNorm2d(filters)
         self.conv2 = nn.Conv2d(filters, filters, 3, padding=1, bias=False)
-        self.bn2   = nn.BatchNorm2d(filters)
-        self.se    = SELayer(filters)
+        self.bn2 = nn.BatchNorm2d(filters)
+        self.se = SELayer(filters)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         residual = x
@@ -129,6 +115,7 @@ class ResBlock(nn.Module):
 # Full network
 # ---------------------------------------------------------------------------
 
+
 class GomokuNet(nn.Module):
     """10-block SE-ResNet for 15×15 Gomoku (Swap2 variant).
 
@@ -141,7 +128,7 @@ class GomokuNet(nn.Module):
     def __init__(
         self,
         num_filters: int = NUM_FILTERS,
-        num_blocks:  int = NUM_BLOCKS,
+        num_blocks: int = NUM_BLOCKS,
     ):
         super().__init__()
 
@@ -153,9 +140,7 @@ class GomokuNet(nn.Module):
         )
 
         # Residual tower.
-        self.tower = nn.Sequential(
-            *[ResBlock(num_filters) for _ in range(num_blocks)]
-        )
+        self.tower = nn.Sequential(*[ResBlock(num_filters) for _ in range(num_blocks)])
 
         # Policy head: 2 conv filters → flatten → 230 logits.
         self.policy_head = nn.Sequential(
@@ -184,61 +169,74 @@ class GomokuNet(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Export
-# ---------------------------------------------------------------------------
+
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--precision", type=str, choices=["fp16", "fp32"], default="fp32"
+    )
+    args = parser.parse_args()
+
     assert torch.cuda.is_available(), "CUDA is not available"
     device = torch.device("cuda")
 
-    # torchsummary feeds float32 inputs internally, so run it before .half().
-    model_fp32 = GomokuNet().to(device).eval()
-    summary(model_fp32, (NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE))
-    del model_fp32
+    # torchsummary feeds float32 inputs internally, so run it before casting.
+    model = GomokuNet().to(device).eval()
+    summary(model, (NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE))
 
-    # FP16 inference — the RTX 4060 Ti has a 128-bit memory bus (288 GB/s).
-    # Inference is memory-bandwidth-bound, not compute-bound: FP16 weights are
-    # half the size, halving the DRAM traffic per forward pass and effectively
-    # doubling throughput. Tensor cores are also fully engaged in FP16 mode.
-    # The C++ BatchInferenceExecutor casts float32 board tensors to FP16 before
-    # the forward pass and converts outputs back to float32 after; callers
-    # (NeuralNetEvaluator) remain unaware of the precision used internally.
-    model = GomokuNet().to(device).half().eval()
+    # Set precision
+    dtype = torch.float32 if args.precision == "fp32" else torch.float16
+    if args.precision == "fp16":
+        model = model.half()
 
-    # Throughput test:
-    BATCH_SIZE = 192
-    
-    time_begin = time.time()
-    NUM_INFERENCE = 1000
-    for _ in range(NUM_INFERENCE):
-        batch = torch.ones(
-            BATCH_SIZE, NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE,
-            dtype=torch.float16) * 0.2345
-        model(batch.to(device))
-    time_end = time.time()
-    print(f"Average inference time: {(time_end - time_begin) * 1000 / (NUM_INFERENCE*BATCH_SIZE)} ms")
-
-    # torch.jit.trace for LibTorch (C++) loading. Must trace in FP16 so the
-    # exported model's internal dtypes match what RunBatch sends at inference.
-    # Note: for Python-side training (Phase 3) wrap with torch.compile() instead.
+    # Trace the model.
     dummy = torch.zeros(
-        1, NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE,
-        device=device, dtype=torch.float16)
+        1,
+        NUM_INPUT_CHANNELS,
+        BOARD_SIZE,
+        BOARD_SIZE,
+        device=device,
+        dtype=dtype,
+    )
     traced = torch.jit.trace(model, dummy)
 
     # Sanity check shapes.
     with torch.no_grad():
         policy, value = traced(dummy)
     assert policy.shape == (1, NUM_ACTIONS), f"Bad policy shape: {policy.shape}"
-    assert value.shape  == (1, 1),           f"Bad value shape:  {value.shape}"
+    assert value.shape == (1, 1), f"Bad value shape:  {value.shape}"
 
     out_path = "model.pt"
     traced.save(out_path)
-    print(f"\nSaved TorchScript model → {out_path}")
+    print(f"\nSaved TorchScript model ({args.precision}) → {out_path}")
     print(f"  Filters:       {NUM_FILTERS}")
     print(f"  Blocks:        {NUM_BLOCKS}")
     print(f"  Policy shape:  {list(policy.shape)}")
     print(f"  Value shape:   {list(value.shape)}")
+
+    # Throughput test:
+    test_model = model.half()
+    BATCH_SIZE = 192
+
+    time_begin = time.time()
+    NUM_INFERENCE = 1000
+    for _ in range(NUM_INFERENCE):
+        batch = (
+            torch.ones(
+                BATCH_SIZE,
+                NUM_INPUT_CHANNELS,
+                BOARD_SIZE,
+                BOARD_SIZE,
+                dtype=torch.float16,
+            )
+            * 0.2345
+        )
+        test_model(batch.to(device))
+    time_end = time.time()
+    print(
+        f"Average inference time: {(time_end - time_begin) * 1000 / (NUM_INFERENCE * BATCH_SIZE)} ms"
+    )
 
 
 if __name__ == "__main__":
