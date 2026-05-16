@@ -61,14 +61,11 @@ class MCTS {
   // Initializes the MCTS engine with search hyperparameters.
   MCTS(int num_simulations, int batch_size, float c_puct);
 
-  // Performs MCTS search from the current root_board and returns the 
+  // Performs MCTS search from the current root_board and returns the
   // simulated policy (normalized visit counts for each action).
   std::vector<float> Search(const Board& root_board, Evaluator* evaluator);
 
-  // Helper to extract the action ID with the highest probability from a policy.
-  static int GetBestAction(const std::vector<float>& policy);
-
-  // Advances the root node to the child corresponding to action_id, preserving 
+  // Advances the root node to the child corresponding to action_id, preserving
   // the search tree for future searches. Discards the rest of the tree.
   void SelectAction(int action_id);
 
@@ -85,3 +82,6 @@ class MCTS {
 
   std::unique_ptr<MCTSNode> root_;
 };
+
+// Helper to extract the action ID with the highest probability from a policy.
+int GetBestAction(const std::vector<float>& policy);

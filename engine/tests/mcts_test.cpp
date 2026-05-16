@@ -12,9 +12,9 @@ TEST(MCTSTest, SimpleEndgame) {
 
   Board board;
   // Fast-forward to standard phase, A is Black, B is White
-  board.Apply(Action::FromXY(0, 0).id);                          // B
-  board.Apply(Action::FromXY(1, 0).id);                          // W
-  board.Apply(Action::FromXY(2, 0).id);                          // B
+  board.Apply(Action::FromXY(0, 0).id);    // B
+  board.Apply(Action::FromXY(1, 0).id);    // W
+  board.Apply(Action::FromXY(2, 0).id);    // B
   board.Apply(Action::kSwap2ChooseBlack);  // B chooses Black. A becomes White.
   // A becomes White. Next to move is White (A).
   EXPECT_EQ(board.current_player(), Seat::kA);
@@ -58,7 +58,7 @@ TEST(MCTSTest, SimpleEndgame) {
   MCTS mcts(1000, 32, 1.0f);  // 1000 sims, batch size 32
   std::vector<float> policy = mcts.Search(b, &evaluator);
 
-  int best_move = MCTS::GetBestAction(policy);
+  int best_move = GetBestAction(policy);
 
   EXPECT_EQ(best_move, Action::FromXY(4, 0).id);  // Index of (4, 0)
 }

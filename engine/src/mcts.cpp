@@ -7,7 +7,11 @@
 constexpr int kVirtualLoss = 3;
 
 namespace {
-float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child, float c_puct) {
+
+// Calculates the PUCT (Polynomial Upper Confidence Trees) value for a child
+// node.
+float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child,
+                    float c_puct) {
   float q = 0.0f;
   int child_visits = child->visits();
   if (child_visits > 0) {
@@ -21,7 +25,17 @@ float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child, float c_puct)
 
   return q + u;
 }
+
 }  // namespace
+
+int GetBestAction(const std::vector<float>& policy) {
+  if (policy.empty()) {
+    // Should not happen in practice.
+    return -1;
+  }
+  auto it = std::max_element(policy.begin(), policy.end());
+  return std::distance(policy.begin(), it);
+}
 
 MCTSNode::MCTSNode(int action_id, float prior_prob, Seat current_player)
     : action_id_(action_id),
@@ -77,8 +91,9 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
 
   int simulations_done = 0;
   while (simulations_done < num_simulations_) {
-    int current_batch_size = std::min(batch_size_, num_simulations_ - simulations_done);
-    
+    int current_batch_size =
+        std::min(batch_size_, num_simulations_ - simulations_done);
+
     std::vector<Board> leaf_boards;
     std::vector<std::vector<MCTSNode*>> paths(current_batch_size);
     std::vector<int> leaf_indices(current_batch_size, -1);
@@ -131,7 +146,8 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
         leaf_val = terminal_values[i];
       } else {
         const auto& eval_res = eval_results[leaf_indices[i]];
-        paths[i].back()->Expand(leaf_boards[leaf_indices[i]], eval_res.move_pmf);
+        paths[i].back()->Expand(leaf_boards[leaf_indices[i]],
+                                eval_res.move_pmf);
         leaf_val = eval_res.value;
       }
 
@@ -174,18 +190,4 @@ void MCTS::SelectAction(int action_id) {
   }
 }
 
-void MCTS::Reset() {
-  root_ = nullptr;
-}
-
-int MCTS::GetBestAction(const std::vector<float>& policy) {
-  int best_action = -1;
-  float max_prob = -1.0f;
-  for (size_t i = 0; i < policy.size(); ++i) {
-    if (policy[i] > max_prob) {
-      max_prob = policy[i];
-      best_action = i;
-    }
-  }
-  return best_action;
-}
+void MCTS::Reset() { root_ = nullptr; }
