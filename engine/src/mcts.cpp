@@ -6,6 +6,23 @@
 
 constexpr int kVirtualLoss = 3;
 
+namespace {
+float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child, float c_puct) {
+  float q = 0.0f;
+  int child_visits = child->visits();
+  if (child_visits > 0) {
+    float raw_q = child->value_sum() / child_visits;
+    q = (parent->current_player() == child->current_player()) ? raw_q : -raw_q;
+  }
+
+  float u = c_puct * child->prior_prob() *
+            std::sqrt(static_cast<float>(parent->visits())) /
+            (1.0f + child_visits);
+
+  return q + u;
+}
+}  // namespace
+
 MCTSNode::MCTSNode(int action_id, float prior_prob, Seat current_player)
     : action_id_(action_id),
       prior_prob_(prior_prob),
@@ -47,14 +64,16 @@ MCTS::MCTS(int num_simulations, int batch_size, float c_puct)
       batch_size_(batch_size),
       c_puct_(c_puct) {}
 
-void MCTS::Search(const Board& root_board, Evaluator* evaluator) {
-  // TODO: Implement Tree Caching (Section 3.2). Currently we throw away the 
-  // tree on every search. We should preserve it and advance the root pointer.
-  root_ = std::make_unique<MCTSNode>(-1, 1.0f, root_board.current_player());
+std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
+  if (!root_) {
+    root_ = std::make_unique<MCTSNode>(-1, 1.0f, root_board.current_player());
+  }
 
-  // Evaluate root
-  auto res = evaluator->Evaluate({root_board});
-  root_->Expand(root_board, res[0].move_pmf);
+  // Evaluate root if not expanded
+  if (!root_->is_expanded()) {
+    auto res = evaluator->Evaluate({root_board});
+    root_->Expand(root_board, res[0].move_pmf);
+  }
 
   int simulations_done = 0;
   while (simulations_done < num_simulations_) {
@@ -77,7 +96,7 @@ void MCTS::Search(const Board& root_board, Evaluator* evaluator) {
         MCTSNode* best_child = nullptr;
 
         for (const auto& child : node->children()) {
-          float puct = CalculatePUCT(node, child.get());
+          float puct = CalculatePUCT(node, child.get(), c_puct_);
           if (puct > max_puct) {
             max_puct = puct;
             best_child = child.get();
@@ -125,33 +144,48 @@ void MCTS::Search(const Board& root_board, Evaluator* evaluator) {
 
     simulations_done += current_batch_size;
   }
-}
 
-float MCTS::CalculatePUCT(const MCTSNode* parent, const MCTSNode* child) const {
-  float q = 0.0f;
-  int child_visits = child->visits();
-  if (child_visits > 0) {
-    float raw_q = child->value_sum() / child_visits;
-    q = (parent->current_player() == child->current_player()) ? raw_q : -raw_q;
-  }
-
-  float u = c_puct_ * child->prior_prob() *
-            std::sqrt(static_cast<float>(parent->visits())) /
-            (1.0f + child_visits);
-
-  return q + u;
-}
-
-int MCTS::GetBestMove() const {
-  int best_action = -1;
-  int max_visits = -1;
+  std::vector<float> policy(Board::kNumActions, 0.0f);
+  int total_visits = 0;
 
   for (const auto& child : root_->children()) {
-    if (child->visits() > max_visits) {
-      max_visits = child->visits();
-      best_action = child->action_id();
+    total_visits += child->visits();
+  }
+
+  if (total_visits > 0) {
+    for (const auto& child : root_->children()) {
+      policy[child->action_id()] =
+          static_cast<float>(child->visits()) / total_visits;
     }
   }
 
+  return policy;
+}
+
+void MCTS::SelectAction(int action_id) {
+  if (!root_) return;
+
+  std::unique_ptr<MCTSNode> child = root_->DetachChild(action_id);
+  if (child) {
+    root_ = std::move(child);
+  } else {
+    // Action not found in children. Reset the tree.
+    Reset();
+  }
+}
+
+void MCTS::Reset() {
+  root_ = nullptr;
+}
+
+int MCTS::GetBestAction(const std::vector<float>& policy) {
+  int best_action = -1;
+  float max_prob = -1.0f;
+  for (size_t i = 0; i < policy.size(); ++i) {
+    if (policy[i] > max_prob) {
+      max_prob = policy[i];
+      best_action = i;
+    }
+  }
   return best_action;
 }

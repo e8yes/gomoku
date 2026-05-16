@@ -31,6 +31,19 @@ class MCTSNode {
     return children_;
   }
 
+  // Removes and returns the child node corresponding to the given action_id.
+  // Returns nullptr if no such child exists.
+  std::unique_ptr<MCTSNode> DetachChild(int action_id) {
+    for (auto it = children_.begin(); it != children_.end(); ++it) {
+      if ((*it)->action_id() == action_id) {
+        std::unique_ptr<MCTSNode> child = std::move(*it);
+        children_.erase(it);
+        return child;
+      }
+    }
+    return nullptr;
+  }
+
  private:
   int action_id_;
   float prior_prob_;
@@ -45,11 +58,24 @@ class MCTSNode {
 
 class MCTS {
  public:
+  // Initializes the MCTS engine with search hyperparameters.
   MCTS(int num_simulations, int batch_size, float c_puct);
 
-  void Search(const Board& root_board, Evaluator* evaluator);
-  int GetBestMove() const;  // Temperature=0 implicitly
+  // Performs MCTS search from the current root_board and returns the 
+  // simulated policy (normalized visit counts for each action).
+  std::vector<float> Search(const Board& root_board, Evaluator* evaluator);
 
+  // Helper to extract the action ID with the highest probability from a policy.
+  static int GetBestAction(const std::vector<float>& policy);
+
+  // Advances the root node to the child corresponding to action_id, preserving 
+  // the search tree for future searches. Discards the rest of the tree.
+  void SelectAction(int action_id);
+
+  // Clears the cached search tree.
+  void Reset();
+
+  // Returns the root node of the search tree.
   const MCTSNode* root() const { return root_.get(); }
 
  private:
@@ -58,6 +84,4 @@ class MCTS {
   float c_puct_;
 
   std::unique_ptr<MCTSNode> root_;
-
-  float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child) const;
 };

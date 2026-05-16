@@ -56,8 +56,9 @@ TEST(MCTSTest, SimpleEndgame) {
 
   RandomEvaluator evaluator;
   MCTS mcts(1000, 32, 1.0f);  // 1000 sims, batch size 32
-  mcts.Search(b, &evaluator);
+  std::vector<float> policy = mcts.Search(b, &evaluator);
 
-  int best_move = mcts.GetBestMove();
+  int best_move = MCTS::GetBestAction(policy);
+
   EXPECT_EQ(best_move, Action::FromXY(4, 0).id);  // Index of (4, 0)
 }
