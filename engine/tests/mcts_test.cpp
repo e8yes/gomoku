@@ -55,7 +55,7 @@ TEST(MCTSTest, SimpleEndgame) {
   EXPECT_EQ(b.stone_to_place(), Player::kBlack);
 
   RandomEvaluator evaluator;
-  MCTS mcts(1000, 4, 1.0f);  // 1000 sims, 4 threads
+  MCTS mcts(1000, 32, 1.0f);  // 1000 sims, batch size 32
   mcts.Search(b, &evaluator);
 
   int best_move = mcts.GetBestMove();

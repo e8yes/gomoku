@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <thread>
 
 constexpr int kVirtualLoss = 3;
 
@@ -15,10 +14,7 @@ MCTSNode::MCTSNode(int action_id, float prior_prob, Seat current_player)
 MCTSNode::~MCTSNode() {}
 
 void MCTSNode::Expand(const Board& board, const std::vector<float>& move_pmf) {
-  if (is_expanded_.load(std::memory_order_acquire)) return;
-
-  std::lock_guard<std::mutex> lock(expand_mutex_);
-  if (is_expanded_.load(std::memory_order_relaxed)) return;  // Double check
+  if (is_expanded_) return;
 
   auto legal_actions = board.GetLegalActions();
   for (int action : legal_actions) {
@@ -28,29 +24,27 @@ void MCTSNode::Expand(const Board& board, const std::vector<float>& move_pmf) {
         action, move_pmf[action], child_board.current_player()));
   }
 
-  is_expanded_.store(true, std::memory_order_release);
+  is_expanded_ = true;
 }
 
 void MCTSNode::Update(float value) {
-  value_sum_.fetch_add(value, std::memory_order_relaxed);
-  visits_.fetch_add(1, std::memory_order_relaxed);
+  value_sum_ += value;
+  visits_ += 1;
 }
 
 void MCTSNode::AddVirtualLoss() {
-  visits_.fetch_add(kVirtualLoss, std::memory_order_relaxed);
-  float loss = -1.0f * kVirtualLoss;
-  value_sum_.fetch_add(loss, std::memory_order_relaxed);
+  visits_ += kVirtualLoss;
+  value_sum_ -= static_cast<float>(kVirtualLoss);
 }
 
 void MCTSNode::RevertVirtualLoss() {
-  visits_.fetch_sub(kVirtualLoss, std::memory_order_relaxed);
-  float loss = 1.0f * kVirtualLoss;
-  value_sum_.fetch_add(loss, std::memory_order_relaxed);
+  visits_ -= kVirtualLoss;
+  value_sum_ += static_cast<float>(kVirtualLoss);
 }
 
-MCTS::MCTS(int num_simulations, int num_threads, float c_puct)
+MCTS::MCTS(int num_simulations, int batch_size, float c_puct)
     : num_simulations_(num_simulations),
-      num_threads_(num_threads),
+      batch_size_(batch_size),
       c_puct_(c_puct) {}
 
 void MCTS::Search(const Board& root_board, Evaluator* evaluator) {
@@ -59,78 +53,77 @@ void MCTS::Search(const Board& root_board, Evaluator* evaluator) {
   root_ = std::make_unique<MCTSNode>(-1, 1.0f, root_board.current_player());
 
   // Evaluate root
-  EvaluationResult res = evaluator->Evaluate(root_board);
-  root_->Expand(root_board, res.move_pmf);
+  auto res = evaluator->Evaluate({root_board});
+  root_->Expand(root_board, res[0].move_pmf);
 
-  std::vector<std::thread> threads;
-  for (int i = 0; i < num_threads_; ++i) {
-    threads.emplace_back([this, root_board, evaluator]() {
-      for (int s = 0; s < num_simulations_ / num_threads_; ++s) {
-        this->SearchOnce(root_board, evaluator);
+  int simulations_done = 0;
+  while (simulations_done < num_simulations_) {
+    int current_batch_size = std::min(batch_size_, num_simulations_ - simulations_done);
+    
+    std::vector<Board> leaf_boards;
+    std::vector<std::vector<MCTSNode*>> paths(current_batch_size);
+    std::vector<int> leaf_indices(current_batch_size, -1);
+    std::vector<float> terminal_values(current_batch_size, 0.0f);
+    std::vector<bool> is_terminal(current_batch_size, false);
+
+    for (int i = 0; i < current_batch_size; ++i) {
+      MCTSNode* node = root_.get();
+      Board board = root_board;
+      paths[i].push_back(node);
+      node->AddVirtualLoss();
+
+      while (node->is_expanded() && !node->children().empty()) {
+        float max_puct = -std::numeric_limits<float>::infinity();
+        MCTSNode* best_child = nullptr;
+
+        for (const auto& child : node->children()) {
+          float puct = CalculatePUCT(node, child.get());
+          if (puct > max_puct) {
+            max_puct = puct;
+            best_child = child.get();
+          }
+        }
+
+        node = best_child;
+        node->AddVirtualLoss();
+        board.Apply(node->action_id());
+        paths[i].push_back(node);
       }
-    });
-  }
 
-  for (auto& t : threads) {
-    t.join();
-  }
-}
-
-void MCTS::SearchOnce(const Board& root_board, Evaluator* evaluator) {
-  MCTSNode* node = root_.get();
-  Board board = root_board;
-  std::vector<MCTSNode*> search_path;
-  node->AddVirtualLoss();
-  search_path.push_back(node);
-
-  // Selection
-  while (node->is_expanded() && !node->children().empty()) {
-    float max_puct = -std::numeric_limits<float>::infinity();
-    MCTSNode* best_child = nullptr;
-
-    for (const auto& child : node->children()) {
-      float puct = CalculatePUCT(node, child.get());
-      if (puct > max_puct) {
-        max_puct = puct;
-        best_child = child.get();
+      if (board.IsTerminal()) {
+        is_terminal[i] = true;
+        terminal_values[i] = board.GetValueForSeat(node->current_player());
+      } else {
+        leaf_indices[i] = leaf_boards.size();
+        leaf_boards.push_back(board);
       }
     }
 
-    node = best_child;
+    std::vector<EvaluationResult> eval_results;
+    if (!leaf_boards.empty()) {
+      eval_results = evaluator->Evaluate(leaf_boards);
+    }
 
-    // IMPORTANT: Apply virtual loss IMMEDIATELY upon selection during descent.
-    // This acts as a lock-free penalty. If multiple threads start simultaneously, 
-    // the moment one thread selects this child, its UCB score artificially drops 
-    // for any concurrent threads, naturally steering them to explore different 
-    // parallel branches instead of redundantly evaluating the same path.
-    node->AddVirtualLoss();
-    board.Apply(node->action_id());
-    search_path.push_back(node);
-  }
+    for (int i = 0; i < current_batch_size; ++i) {
+      float leaf_val = 0.0f;
+      Seat leaf_seat = paths[i].back()->current_player();
 
-  // Expansion & Evaluation
-  float leaf_val = 0.0f;
-  Seat leaf_seat = node->current_player();
+      if (is_terminal[i]) {
+        leaf_val = terminal_values[i];
+      } else {
+        const auto& eval_res = eval_results[leaf_indices[i]];
+        paths[i].back()->Expand(leaf_boards[leaf_indices[i]], eval_res.move_pmf);
+        leaf_val = eval_res.value;
+      }
 
-  if (board.IsTerminal()) {
-    // Value from perspective of the leaf's current player (who just
-    // lost/won/drew) Wait, if it's terminal, the game is over. GetValueForSeat
-    // gets the result for leaf_seat.
-    leaf_val = board.GetValueForSeat(leaf_seat);
-  } else {
-    EvaluationResult res = evaluator->Evaluate(board);
-    node->Expand(board, res.move_pmf);
-    leaf_val = res.value;
-  }
+      for (MCTSNode* n : paths[i]) {
+        n->RevertVirtualLoss();
+        float v = (n->current_player() == leaf_seat) ? leaf_val : -leaf_val;
+        n->Update(v);
+      }
+    }
 
-  // Backpropagation
-  for (MCTSNode* n : search_path) {
-    // Revert the artificial penalty applied during descent now that we have 
-    // the true evaluation. This effectively un-does the virtual loss so the
-    // node can be properly updated with the real result.
-    n->RevertVirtualLoss();
-    float v = (n->current_player() == leaf_seat) ? leaf_val : -leaf_val;
-    n->Update(v);
+    simulations_done += current_batch_size;
   }
 }
 
@@ -138,12 +131,6 @@ float MCTS::CalculatePUCT(const MCTSNode* parent, const MCTSNode* child) const {
   float q = 0.0f;
   int child_visits = child->visits();
   if (child_visits > 0) {
-    // q is the average value of the child node.
-    // It's from the child's perspective.
-    // But UCB is for the parent choosing.
-    // If child's current_player is the same as parent's, then q is good.
-    // If child's current_player is different, parent wants to minimize child's
-    // value, so we use -q.
     float raw_q = child->value_sum() / child_visits;
     q = (parent->current_player() == child->current_player()) ? raw_q : -raw_q;
   }

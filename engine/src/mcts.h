@@ -1,7 +1,5 @@
 #pragma once
-#include <atomic>
 #include <memory>
-#include <mutex>
 #include <vector>
 
 #include "board.h"
@@ -21,14 +19,10 @@ class MCTSNode {
 
   int action_id() const { return action_id_; }
   float prior_prob() const { return prior_prob_; }
-  int visits() const { return visits_.load(std::memory_order_relaxed); }
-  float value_sum() const { return value_sum_.load(std::memory_order_relaxed); }
-  bool is_expanded() const {
-    return is_expanded_.load(std::memory_order_acquire);
-  }
-  Seat current_player() const {
-    return current_player_;
-  }  // The player who is to move AT this node's board state
+  int visits() const { return visits_; }
+  float value_sum() const { return value_sum_; }
+  bool is_expanded() const { return is_expanded_; }
+  Seat current_player() const { return current_player_; }
 
   void AddVirtualLoss();
   void RevertVirtualLoss();
@@ -37,24 +31,21 @@ class MCTSNode {
     return children_;
   }
 
-  // Use a mutex just for expanding children to ensure thread safety
-  std::mutex expand_mutex_;
-
  private:
   int action_id_;
   float prior_prob_;
   Seat current_player_;  // The player to move AT this node
 
-  std::atomic<int> visits_{0};
-  std::atomic<float> value_sum_{0.0f};
-  std::atomic<bool> is_expanded_{false};
+  int visits_{0};
+  float value_sum_{0.0f};
+  bool is_expanded_{false};
 
   std::vector<std::unique_ptr<MCTSNode>> children_;
 };
 
 class MCTS {
  public:
-  MCTS(int num_simulations, int num_threads, float c_puct);
+  MCTS(int num_simulations, int batch_size, float c_puct);
 
   void Search(const Board& root_board, Evaluator* evaluator);
   int GetBestMove() const;  // Temperature=0 implicitly
@@ -63,11 +54,10 @@ class MCTS {
 
  private:
   int num_simulations_;
-  int num_threads_;
+  int batch_size_;
   float c_puct_;
 
   std::unique_ptr<MCTSNode> root_;
 
-  void SearchOnce(const Board& root_board, Evaluator* evaluator);
   float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child) const;
 };

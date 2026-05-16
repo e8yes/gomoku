@@ -45,7 +45,7 @@ class NeuralNetEvaluator : public Evaluator {
 
   // Encodes the board, submits to the executor, blocks until the batch is
   // processed, decodes the result, and returns an EvaluationResult.
-  EvaluationResult Evaluate(const Board& board) override;
+  std::vector<EvaluationResult> Evaluate(const std::vector<Board>& boards) override;
 
  private:
   std::shared_ptr<BatchInferenceExecutor> executor_;

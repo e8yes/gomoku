@@ -12,5 +12,5 @@ struct EvaluationResult {
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
-  virtual EvaluationResult Evaluate(const Board& board) = 0;
+  virtual std::vector<EvaluationResult> Evaluate(const std::vector<Board>& boards) = 0;
 };

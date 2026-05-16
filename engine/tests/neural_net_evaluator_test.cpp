@@ -107,7 +107,7 @@ TEST(NeuralNetEvaluatorTest, EndToEndWithRealModel) {
   NeuralNetEvaluator evaluator(exec);
 
   Board b = MakeStandardBoard();
-  EvaluationResult r = evaluator.Evaluate(b);
+  EvaluationResult r = evaluator.Evaluate({b})[0];
 
   ASSERT_EQ(static_cast<int>(r.move_pmf.size()), Board::kNumActions);
   float sum = 0.0f;

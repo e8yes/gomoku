@@ -5,18 +5,18 @@
 
 namespace {
 
-// Stacks CPU input tensors into a batch, runs one GPU forward pass, brings
-// outputs back to CPU, and returns one (policy_logits, value) pair per input.
-// Cloning each slice ensures it owns its storage after the batch is released.
+// Concatenates batched CPU input tensors into a large batch, runs one GPU forward pass,
+// brings outputs back to CPU, and returns one (policy_logits, value) pair per request
+// by slicing the large output batch.
 std::vector<BatchInferenceExecutor::Output> RunBatch(
     torch::jit::Module& model, torch::Device device,
     const std::vector<torch::Tensor>& inputs) {
-  // Stack CPU float32 board tensors → [N, C, H, W], move to GPU.
+  // Concatenate small-batch CPU float32 board tensors → [N_total, C, H, W], move to GPU.
   // Cast to FP16: the 4060 Ti has a 128-bit memory bus (288 GB/s), making
   // inference memory-bandwidth-bound. FP16 halves weight traffic per forward
   // pass and engages the tensor cores, roughly doubling throughput.
   torch::Tensor batch =
-      torch::stack(inputs, /*dim=*/0).to(device).to(torch::kFloat16);
+      torch::cat(inputs, /*dim=*/0).to(device).to(torch::kFloat16);
 
   torch::NoGradGuard no_grad;
   auto out = model.forward({batch}).toTuple();
@@ -24,16 +24,21 @@ std::vector<BatchInferenceExecutor::Output> RunBatch(
   // Convert FP16 outputs back to FP32 on CPU so downstream consumers
   // (NeuralNetEvaluator::DecodeOutput) can use float accessors unchanged.
   torch::Tensor policy =
-      out->elements()[0].toTensor().to(torch::kFloat32).cpu();  // [N, A]
+      out->elements()[0].toTensor().to(torch::kFloat32).cpu();  // [N_total, A]
   torch::Tensor values =
-      out->elements()[1].toTensor().to(torch::kFloat32).cpu();  // [N, 1]
+      out->elements()[1].toTensor().to(torch::kFloat32).cpu();  // [N_total, 1]
 
 
   const int N = static_cast<int>(inputs.size());
   std::vector<BatchInferenceExecutor::Output> results;
   results.reserve(N);
+  
+  int offset = 0;
   for (int i = 0; i < N; ++i) {
-    results.emplace_back(policy[i].clone(), values[i].clone());
+    int N_i = inputs[i].size(0);
+    results.emplace_back(policy.slice(0, offset, offset + N_i).clone(),
+                         values.slice(0, offset, offset + N_i).clone());
+    offset += N_i;
   }
   return results;
 }
@@ -45,8 +50,8 @@ std::vector<BatchInferenceExecutor::Output> RunBatch(
 // ---------------------------------------------------------------------------
 BatchInferenceExecutor::BatchInferenceExecutor(
     const std::filesystem::path& model_path, torch::Device device,
-    int max_batch_size, std::chrono::microseconds max_wait_us)
-    : device_(device), queue_(max_batch_size, max_wait_us) {
+    int max_requests, std::chrono::microseconds max_wait_us)
+    : device_(device), queue_(max_requests, max_wait_us) {
   try {
     model_ = torch::jit::load(model_path.string(), device_);
     model_.eval();
