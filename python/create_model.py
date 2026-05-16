@@ -167,26 +167,34 @@ class GomokuNet(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-# Export
-# ---------------------------------------------------------------------------
+import argparse
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--precision", type=str, choices=["fp16", "fp32"], default="fp32")
+    args = parser.parse_args()
+
     assert torch.cuda.is_available(), "CUDA is not available"
     device = torch.device("cuda")
 
-    # torchsummary feeds float32 inputs internally, so run it before .half().
+    # torchsummary feeds float32 inputs internally, so run it before casting.
     model = GomokuNet().to(device).eval()
     summary(model, (NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE))
 
-    # Trace the model. Master model is always in FP32.
+    # Set precision
+    dtype = torch.float32 if args.precision == "fp32" else torch.float16
+    if args.precision == "fp16":
+        model = model.half()
+
+    # Trace the model.
     dummy = torch.zeros(
         1,
         NUM_INPUT_CHANNELS,
         BOARD_SIZE,
         BOARD_SIZE,
         device=device,
-        dtype=torch.float32,
+        dtype=dtype,
     )
     traced = torch.jit.trace(model, dummy)
 
@@ -198,7 +206,7 @@ def main():
 
     out_path = "model.pt"
     traced.save(out_path)
-    print(f"\nSaved TorchScript model → {out_path}")
+    print(f"\nSaved TorchScript model ({args.precision}) → {out_path}")
     print(f"  Filters:       {NUM_FILTERS}")
     print(f"  Blocks:        {NUM_BLOCKS}")
     print(f"  Policy shape:  {list(policy.shape)}")
