@@ -188,7 +188,7 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
     current_challenger_pth = os.path.join(
         config.model_export_path, f"challenger{iteration:02d}.pth"
     )
-    learning_rate = config.train_params["lr_seed"] * pow(0.9, iteration)
+    learning_rate = config.train_params["lr_seed"] * pow(config.train_params.get("lr_decay", 0.9), iteration)
     logging.info(
         f"[*] Training challenger model from {prev_challenger_pth} to {current_challenger_pth} with learning rate {learning_rate}"
     )
