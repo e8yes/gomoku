@@ -1,7 +1,108 @@
 #include "board.h"
 
-#include <stdexcept>
+#include <random>
 #include <sstream>
+#include <stdexcept>
+
+namespace {
+
+struct ZobristKeys {
+  int64_t cells[kNumBoardHashes][Board::kNumCells][3];
+
+  int64_t phase[kNumBoardHashes][5];
+
+  int64_t player[kNumBoardHashes][2];  // Seat::kA, Seat::kB
+
+  int64_t stone_to_place[kNumBoardHashes][3];  // Player::kNone, kBlack, kWhite
+
+  int64_t seat_a[kNumBoardHashes][3];
+  int64_t seat_b[kNumBoardHashes][3];
+
+  int64_t result[kNumBoardHashes]
+                [4];  // Result::kUndetermined, kPlayerAWin, kPlayerBWin, kDraw
+
+  ZobristKeys() {
+    std::mt19937_64 rng(13377331ULL);
+
+    for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+      for (int i = 0; i < Board::kNumCells; ++i) {
+        for (int p = 0; p < 3; ++p) {
+          cells[hash][i][p] = static_cast<int64_t>(rng());
+        }
+      }
+      for (int p = 0; p < 5; ++p) {
+        phase[hash][p] = static_cast<int64_t>(rng());
+      }
+      for (int pl = 0; pl < 2; ++pl) {
+        player[hash][pl] = static_cast<int64_t>(rng());
+      }
+      for (int p = 0; p < 3; ++p) {
+        stone_to_place[hash][p] = static_cast<int64_t>(rng());
+        seat_a[hash][p] = static_cast<int64_t>(rng());
+        seat_b[hash][p] = static_cast<int64_t>(rng());
+      }
+      for (int r = 0; r < 4; ++r) {
+        result[hash][r] = static_cast<int64_t>(rng());
+      }
+    }
+  }
+};
+
+const ZobristKeys& GetZobristKeys() {
+  static const ZobristKeys keys;
+  return keys;
+}
+
+void XorCell(BoardSignature& sig, int index, Player player) {
+  const auto& keys = GetZobristKeys();
+  for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+    sig[hash] ^= keys.cells[hash][index][static_cast<int>(player)];
+  }
+}
+
+void XorPhase(BoardSignature& sig, Phase phase) {
+  const auto& keys = GetZobristKeys();
+  for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+    sig[hash] ^= keys.phase[hash][static_cast<int>(phase)];
+  }
+}
+
+void XorCurrentPlayer(BoardSignature& sig, Seat seat) {
+  const auto& keys = GetZobristKeys();
+  for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+    sig[hash] ^= keys.player[hash][static_cast<int>(seat)];
+  }
+}
+
+void XorStoneToPlace(BoardSignature& sig, Player player) {
+  const auto& keys = GetZobristKeys();
+  for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+    sig[hash] ^= keys.stone_to_place[hash][static_cast<int>(player)];
+  }
+}
+
+void XorSeatAStone(BoardSignature& sig, Player player) {
+  const auto& keys = GetZobristKeys();
+  for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+    sig[hash] ^= keys.seat_a[hash][static_cast<int>(player)];
+  }
+}
+
+void XorSeatBStone(BoardSignature& sig, Player player) {
+  const auto& keys = GetZobristKeys();
+  for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+    sig[hash] ^= keys.seat_b[hash][static_cast<int>(player)];
+  }
+}
+
+void XorResult(BoardSignature& sig, Result result) {
+  const auto& keys = GetZobristKeys();
+  for (int hash = 0; hash < kNumBoardHashes; ++hash) {
+    sig[hash] ^= keys.result[hash][static_cast<int>(result)];
+  }
+}
+
+}  // namespace
 
 std::string Action::ToString() const {
   if (id == kSwap2ChooseWhite) return "swap2_choose_white";
@@ -9,13 +110,13 @@ std::string Action::ToString() const {
   if (id == kSwap2PlaceTwo) return "swap2_place_two";
   if (id == kChooseWhite) return "choose_white";
   if (id == kChooseBlack) return "choose_black";
-  
+
   if (IsPlacement()) {
     std::ostringstream oss;
     oss << "(" << x() << "," << y() << ")";
     return oss.str();
   }
-  
+
   return "invalid_action";
 }
 
@@ -25,7 +126,7 @@ Action Action::FromString(const std::string& str) {
   if (str == "swap2_place_two") return Action(kSwap2PlaceTwo);
   if (str == "choose_white") return Action(kChooseWhite);
   if (str == "choose_black") return Action(kChooseBlack);
-  
+
   if (str.length() >= 5 && str.front() == '(' && str.back() == ')') {
     size_t comma = str.find(',');
     if (comma != std::string::npos) {
@@ -34,7 +135,7 @@ Action Action::FromString(const std::string& str) {
       return FromXY(x, y);
     }
   }
-  
+
   throw std::invalid_argument("Invalid action string: " + str);
 }
 
@@ -47,6 +148,13 @@ Board::Board() {
   seat_a_stone_ = Player::kNone;
   seat_b_stone_ = Player::kNone;
   result_ = Result::kUndetermined;
+
+  zobrists_.fill(0);
+
+  for (int i = 0; i < kNumCells; ++i) {
+    XorCell(zobrists_, i, cells_[i]);
+  }
+  ToggleHash(-1);
 }
 
 std::vector<int> Board::GetLegalActions() const {
@@ -79,6 +187,8 @@ void Board::Apply(int action_id) {
   }
 
   Action a(action_id);
+
+  ToggleHash(a.id);
 
   if (a.IsPlacement()) {
     int x = a.id % kSize;
@@ -131,6 +241,8 @@ void Board::Apply(int action_id) {
       current_player_ = Seat::kB;
     }
   }
+
+  ToggleHash(a.id);
 }
 
 void Board::TransitionPhase() {
@@ -204,11 +316,15 @@ float Board::GetValueForSeat(Seat seat) const {
 }
 
 void Board::Retract(int action_id) {
-  result_ = Result::kUndetermined;
   Action a(action_id);
 
+  ToggleHash(a.id);
+
   if (!a.IsPlacement()) {
-    if (a.id == Action::kSwap2ChooseWhite || a.id == Action::kSwap2ChooseBlack || a.id == Action::kSwap2PlaceTwo) {
+    result_ = Result::kUndetermined;
+
+    if (a.id == Action::kSwap2ChooseWhite ||
+        a.id == Action::kSwap2ChooseBlack || a.id == Action::kSwap2PlaceTwo) {
       seat_a_stone_ = Player::kNone;
       seat_b_stone_ = Player::kNone;
       phase_ = Phase::kSwap2Decision;
@@ -221,45 +337,61 @@ void Board::Retract(int action_id) {
       stone_to_place_ = Player::kNone;
       current_player_ = Seat::kA;
     }
-    return;
-  }
-
-  // Placement
-  cells_[a.id] = Player::kNone;
-  move_count_--;
-
-  if (move_count_ == 0) {
-    phase_ = Phase::kPlaceInitialThree;
-    stone_to_place_ = Player::kBlack;
-    current_player_ = Seat::kA;
-  } else if (move_count_ == 1) {
-    phase_ = Phase::kPlaceInitialThree;
-    stone_to_place_ = Player::kWhite;
-    current_player_ = Seat::kA;
-  } else if (move_count_ == 2) {
-    phase_ = Phase::kPlaceInitialThree;
-    stone_to_place_ = Player::kBlack;
-    current_player_ = Seat::kA;
-  } else if (move_count_ == 3) {
-    if (phase_ == Phase::kSwap2PlaceTwo) {
-      stone_to_place_ = Player::kWhite;
-      current_player_ = Seat::kB;
-    } else {
-      stone_to_place_ = Player::kWhite;
-      current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
-    }
-  } else if (move_count_ == 4) {
-    if (phase_ == Phase::kChooseColor) {
-      phase_ = Phase::kSwap2PlaceTwo;
-      stone_to_place_ = Player::kBlack;
-      current_player_ = Seat::kB;
-    } else {
-      stone_to_place_ = (stone_to_place_ == Player::kBlack) ? Player::kWhite : Player::kBlack;
-      current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
-    }
   } else {
-    stone_to_place_ = (stone_to_place_ == Player::kBlack) ? Player::kWhite : Player::kBlack;
-    current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+    // Placement retraction
+    result_ = Result::kUndetermined;
+    cells_[a.id] = Player::kNone;
+    move_count_--;
+
+    if (move_count_ == 0) {
+      phase_ = Phase::kPlaceInitialThree;
+      stone_to_place_ = Player::kBlack;
+      current_player_ = Seat::kA;
+    } else if (move_count_ == 1) {
+      phase_ = Phase::kPlaceInitialThree;
+      stone_to_place_ = Player::kWhite;
+      current_player_ = Seat::kA;
+    } else if (move_count_ == 2) {
+      phase_ = Phase::kPlaceInitialThree;
+      stone_to_place_ = Player::kBlack;
+      current_player_ = Seat::kA;
+    } else if (move_count_ == 3) {
+      if (phase_ == Phase::kSwap2PlaceTwo) {
+        stone_to_place_ = Player::kWhite;
+        current_player_ = Seat::kB;
+      } else {
+        stone_to_place_ = Player::kWhite;
+        current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+      }
+    } else if (move_count_ == 4) {
+      if (phase_ == Phase::kChooseColor) {
+        phase_ = Phase::kSwap2PlaceTwo;
+        stone_to_place_ = Player::kBlack;
+        current_player_ = Seat::kB;
+      } else {
+        stone_to_place_ =
+            (stone_to_place_ == Player::kBlack) ? Player::kWhite : Player::kBlack;
+        current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+      }
+    } else {
+      stone_to_place_ =
+          (stone_to_place_ == Player::kBlack) ? Player::kWhite : Player::kBlack;
+      current_player_ = (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+    }
   }
+
+  ToggleHash(a.id);
 }
 
+void Board::ToggleHash(int action_id) {
+  Action a(action_id);
+  if (a.IsPlacement()) {
+    XorCell(zobrists_, a.id, cells_[a.id]);
+  }
+  XorPhase(zobrists_, phase_);
+  XorCurrentPlayer(zobrists_, current_player_);
+  XorStoneToPlace(zobrists_, stone_to_place_);
+  XorSeatAStone(zobrists_, seat_a_stone_);
+  XorSeatBStone(zobrists_, seat_b_stone_);
+  XorResult(zobrists_, result_);
+}

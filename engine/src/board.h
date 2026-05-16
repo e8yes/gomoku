@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -22,6 +23,9 @@ enum class Result {
   kPlayerBWin = 2,
   kDraw = 3
 };
+
+const size_t kNumBoardHashes = 2;
+typedef std::array<int64_t, kNumBoardHashes> BoardSignature;
 
 struct Action {
   static constexpr int kSwap2ChooseWhite = 225;
@@ -58,7 +62,7 @@ class Board {
   // Apply action and transition state. Assumes the action is legal.
   void Apply(int action_id);
 
-  // Retract action. This is fully copyless and purely deterministic, perfectly 
+  // Retract action. This is fully copyless and purely deterministic, perfectly
   // suited for minimax perturbation and highly-efficient tree unmaking.
   void Retract(int action_id);
 
@@ -67,6 +71,8 @@ class Board {
   Player stone_to_place() const { return stone_to_place_; }
   Phase phase() const { return phase_; }
   Result result() const { return result_; }
+
+  BoardSignature signature() const { return zobrists_; }
 
   // Returns stone at (x, y)
   Player cell(int x, int y) const { return cells_[y * kSize + x]; }
@@ -90,6 +96,9 @@ class Board {
 
   Result result_;
 
+  BoardSignature zobrists_;
+
   bool CheckWin(int x, int y, Player p) const;
   void TransitionPhase();
+  void ToggleHash(int action_id);
 };
