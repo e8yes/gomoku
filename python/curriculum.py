@@ -133,7 +133,7 @@ def find_last_champion(export_path: str) -> str:
     # Find the champion with the highest iteration number.
     return max(
         champion_pts,
-        key=lambda champion_pt: int(champion_pt.split("champion")[-1].split(".pt")[0]),
+        key=lambda cp: int(''.join(filter(str.isdigit, os.path.basename(cp))) or -1),
     )
 
 
