@@ -218,8 +218,8 @@ def train(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="data")
-    parser.add_argument("--model_path", type=str, default="weights.pth")
     parser.add_argument("--load_path", type=str, default=None)
+    parser.add_argument("--save_path", type=str, default="weights.pth")
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -228,8 +228,8 @@ if __name__ == "__main__":
     setup_logging()
     train(
         data_dir=args.data_dir,
-        model_path=args.model_path,
         load_path=args.load_path,
+        save_path=args.save_path,
         batch_size=args.batch_size,
         epochs=args.epochs,
         lr=args.lr,

@@ -105,11 +105,11 @@ class GomokuDataset(Dataset):
         if self.augment:
             state, prob = self._apply_augmentation(state, prob)
 
-        # 4. Convert to bfloat16 for training
+        # 4. Convert to float32 for training
         return (
-            torch.from_numpy(state).to(torch.bfloat16),
-            torch.from_numpy(prob).to(torch.bfloat16),
-            torch.from_numpy(value).to(torch.bfloat16),
+            torch.from_numpy(state).to(torch.float32),
+            torch.from_numpy(prob).to(torch.float32),
+            torch.from_numpy(value).to(torch.float32),
         )
 
     def _apply_augmentation(
