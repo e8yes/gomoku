@@ -14,10 +14,12 @@ Model I/O contract (must match NeuralNetEvaluator / BatchInferenceExecutor):
     )
 """
 
+import argparse
+import time
+
 import torch
 import torch.nn as nn
 from torchsummary import summary
-import time
 
 # Input channel layout (must match NeuralNetEvaluator::kNumInputChannels and
 # the encoding in NeuralNetEvaluator::BoardToTensorImpl):
@@ -167,12 +169,13 @@ class GomokuNet(nn.Module):
 
 
 # ---------------------------------------------------------------------------
-import argparse
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--precision", type=str, choices=["fp16", "fp32"], default="fp32")
+    parser.add_argument(
+        "--precision", type=str, choices=["fp16", "fp32"], default="fp32"
+    )
     args = parser.parse_args()
 
     assert torch.cuda.is_available(), "CUDA is not available"
