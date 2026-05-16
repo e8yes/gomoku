@@ -15,9 +15,8 @@ Instead of keeping all moves from early random self-play (which is mostly noise)
 - **Subsequent Iterations**: Incrementally add ~1 more move from the end of the game and the re-labeled moves per iteration. By Iteration 30, we will be keeping nearly all moves.
 - **Benefit**: This acts as curriculum learning. The value network perfectly learns the endgame first, and as the horizon expands, it learns to accurately evaluate mid-game states that lead to those known endgames. The early noisy board states serve as regularizers to prevent overfitting.
 
-### 2.2 Data Augmentation & Re-labeling Perturbation
+### 2.2 Data Augmentation
 - **Symmetries**: Every position generated will be augmented using the 8 dihedral symmetries (rotations and flips) of the Gomoku board.
-- **Re-labeling Perturbation**: To quickly bootstrap tactical knowledge in early iterations, we will traverse from the endgame of self-play games all the way to just after the swap 2 opening. For each state, we run our pattern detection rules on the state to find relabeling opportunities. For those moves that we can't re-label, we use the original policy/value from the MCTS search.
 
 ## 3. MCTS Implementation Details
 
@@ -50,28 +49,51 @@ To maximize the throughput of the RTX 4060 Ti during self-play, the C++ engine w
 - **Cumulative Dataset Manager**: Implement a disk-backed storage system to store and index all self-play games from Iteration 1 to the end, preventing overfitting and ensuring tactical variety.
 - **Horizon-Filtered Data Loader**: Implement a PyTorch `Dataset` that samples moves from the cumulative store according to the incremental horizon strategy (Section 2.1).
 - **Iterative Training Loop**: Develop the orchestration script to manage training cycles and model exports.
-- **Data Gating mechanism**: Implement a gating mechanism where the self-play games are written to a temporary folder first. If the challenger achieves the >55% win rate and is promoted, move the data into the main cumulative data_dir. Otherwise discard the generated data to the diagnostics folder so it doesn't poison the mainline dataset. Manual analysis of the diagnostics folder will be performed.
 
-### Phase 4: Data Seeding
-Create the `gomoku_game_generator` C++ executable. Upon iteration=0, we perform the data seeding process instead of self play. Read curriculum.py to understand the big picture.
-- Randomly play 40,000 games till end.
-- Keep the last move of each game. Write the (board, policy, value) training examples according to the format specified by cumulative_dataset.py.
-- Run re-labeling for the rest of the board states all the way back to just after the swap 2 opening move. The re-labeling heuristic is described in detail below.
+### Phase 4: VCF solver and MCTS enhancements
+- **VCF solver**: Implement on a playground/toy folder a VCF solver. Correctness is the priority. Test against known VCF win/loss positions. It returns the first found winning sequence for the current player if one exists, otherwise it returns an empty vector.
+- **VCT Solver**: TBD.
+- **MCTS Noise**: Optionally add Dirichlet noise to the legal moves' prior probabilities at the root node to encourage exploration during self-play and evaluation.
+- **MCTS Caching**: Caching of the MCTS tree throughout the game. Discard nodes after a move is made and the child becomes the new root.
+- **Non-parallel MCTS**: The current MCTS implementation is parallel with virtual loss to prevent thread collisions. Context switching overhead is substantial. Retain the current virtual loss strategy but gather to-be-expanded nodes into a small-batch (32 nodes) for evaluation. The batch inference executor should gather small-batches and accumulate them into a larger batch of 192 inputs. Notify the `std::future<Response[]>` per small-batch but not per input. Fit the `Evaluator` interface to accept small-batch as input. Backpropagate results after the small-batch evaluation completes.
+- **Evaluation Cache**: Hash the board state using Zobrist hashing to avoid redundant computations. Identical board states encountered during search should return identical policy/value vectors. Re-use evaluated nodes throughout the game.
+- **MCTS with Endgame Solver**: Derive an endgame solver interface. Let the MCTS class optionally accept the solver interface on construction. It should return a winning sequence for the current player if one exists, otherwise it returns an empty vector. We run the solver in a separate thread after issuing the evaluator call for the small-batch. This allows us to hide the CPU cost of solving the small-batch while the GPU is evaluating on it. If solved, we override the policy and value returned from the evaluator and update the evaluation cache. Based on the playground/toy VCF solver, implement a high-performance endgame solver on the defined interface.
 
-#### Re-labeling
-Re-labeling happens when we can prove the tactical truth of the endgame moves by the following simple rules executed in sequence.
-1. Depth 1 win:  Find positions (our stone) that will lead to win in 1 move. Policy on those positions are 1/N and value is 1. N is the number of such positions.
-2. Depth 2 defense:  Find positions (opponent's stone) that will lead to win in 1 move. Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
-3. Depth 3 win (open 4): Find positions (our stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. Value is 1. N is the number of such positions.
-4. Depth 4 defense (open 4): Find positions (opponent's stone) that will form an open 4 (any one side form an overline potential doesn't count). Policy on those positions are 1/N. N is the number of such positions. If there are multiple such positions, it is a loss. Value is -1. Don't change the value if there is only one position.
 
-### Phase 5: Self-Play Data Generation & Augmentation
-- **Multi-Game Orchestration** (`gomoku_game_generator` C++ executable): The program runs 12 game workers in parallel. Each worker is a self-play game (between the challenger and the champion) that uses MCTS with the neural network evaluator. The MCTS collects 16 board states at a time to form a batch to evaluate with the neural network. A total of 2000 simulations per move (roughly 60 ms per move). Having 12 workers in parallel doesn't increase the throughput by 12 but it is meant to saturate the GPU compute. For a 30-ply game, the throughput is expected to be 0.56 games per second or 2000 games per hour. It takes 4.5 hours to complete one iteration of 9000 games. Check curriculum.py for the commandline arguments for this program.
-- **Data Emission**: Check cumulative_dataset.py for the format of each (board, policy, value) training example. Per section 2.1 and 2.2, trim the game by the horizon limit and relabel them when possible. Re-labeling will be attempted for the rest of the game except of the swap 2 opening. If relabeling fails, then the game record is just discarded. The horizon limit is game_len - (iteration + 1) for iteration 0..50.
-- **Game Stats**: The game generator also outputs statistics about the match between the champion and the challenger. This information is stored in a JSON file that is used to determine whether the challenger should be promoted to champion (see curriculum.py).
+### Phase 5: Data Seeding (`gomoku_game_generator` C++ executable)
+This binary takes in 3 required and 1 optional arguments (see `curriculum.py`):
+- --games: Number of self-play games to generate.
+- --iteration: Iteration number.
+- --out_dir: Directory to output the game data.
+
+Upon iteration=0, we perform the data seeding process by search upon the `RandomEvaluator`.
+- Keep the last 3 moves of each game. Write the (board, policy, value) training examples according to the format specified by `cumulative_dataset.py`.
+- Test run the curriculum.py to see if the entire pipeline runs properly.
+
+### Phase 6: Self-Play Data Generation & Augmentation (`gomoku_game_generator` C++ executable)
+This binary takes in 3 required and 1 optional arguments (see `curriculum.py`):
+- --games: Number of self-play games to generate.
+- --iteration: Iteration number.
+- --out_dir: Directory to output the game data.
+- --champion_model_path: Path to the champion model (optional). If omitted, the evaluator will be the random evaluator.
+
+- **State Space Exploration**: Enable Dirichlet noise at the root node to encourage exploration for each move in the game.
+- **Multi-Game Orchestration**: The program runs 12 game workers in parallel. Each worker runs a self-play game that uses MCTS (400 simulations per move) with the neural network evaluator combined with the VCF endgame solver. Having 12 workers in parallel is meant to saturate the GPU compute. For a 30-ply game, the throughput is expected to be 0.56 games per second or 2000 games per hour. It takes 4.5 hours to complete one iteration of 9000 games.
+- **Data Emission**: Check cumulative_dataset.py for the format of each (board, policy, value) training example. Per section 2.1 and 2.2, trim the game by the horizon limit. The horizon limit is game_len - (iteration + 3) for iteration 0..50.
 - **10-Day Run**: Start the iterative cycle of self-play and training using the Curriculum Learning (endgame first) strategy.
 
-### Phase 6: Match Server Integration
+### Phase 7: Evaluation (`gomoku_model_evaluator` C++ executable)
+This binary takes in 4 arguments (see `curriculum.py`): 
+* --games: Number of matches to evaluate upon.
+* --champion_model_path: Path to the champion model.
+* --challenger_model_path: Path to the challenger model.
+* --out_dir: Directory to output the evaluation results.
+
+- **Model Evaluator**: Disable prior noise after the first 4 plies. Search for 1000 simulations per move.
+- **Gather Statistics**: challenger win rate (with 90% confidence interval), game length (mean/median/std/min/max).
+- **Parallelism**: Like the game generator, this program runs 12 game workers in parallel to saturate the GPU.
+
+### Phase 8: Match Server Integration
 - **Server Client**: Build the gomoku engine client C++ executable that communicates with the match server and plays games. If we run two of the client program, we should be able to see them play games against each other via the spectator client in the `protocol/examples/spectator.py`.
 - **Communication Spec**: Adhere to the match server communication spec in `protocol/spec.md`. It is a JSON-RPC 2.0 protocol.
  
