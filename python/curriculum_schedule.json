@@ -4,6 +4,7 @@
   "model_export_path": "exported_models",
   "game_generator_bin": "./gomoku_game_generator",
   "model_evaluator_bin": "./gomoku_model_evaluator",
+  "start_iteration": 0,
   "num_iterations": 50,
   "games_per_iteration": 9000,
   "games_per_evaluation": 100,
@@ -11,6 +12,7 @@
   "train_params": {
     "batch_size": 512,
     "epochs": 1,
-    "lr_seed": 0.01
+    "lr_seed": 0.01,
+    "lr_decay": 0.9
   }
 }

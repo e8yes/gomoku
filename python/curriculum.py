@@ -44,7 +44,12 @@ class CurriculumConfig:
 
     # Training parameters
     train_params: Dict[str, Any] = field(
-        default_factory=lambda: {"batch_size": 512, "epochs": 1, "lr_seed": 0.01}
+        default_factory=lambda: {
+            "batch_size": 512,
+            "epochs": 1,
+            "lr_seed": 0.01,
+            "lr_decay": 0.9,
+        }
     )
 
     @classmethod
@@ -133,7 +138,7 @@ def find_last_champion(export_path: str) -> str:
     # Find the champion with the highest iteration number.
     return max(
         champion_pts,
-        key=lambda cp: int(''.join(filter(str.isdigit, os.path.basename(cp))) or -1),
+        key=lambda cp: int("".join(filter(str.isdigit, os.path.basename(cp))) or -1),
     )
 
 
@@ -188,7 +193,9 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
     current_challenger_pth = os.path.join(
         config.model_export_path, f"challenger{iteration:02d}.pth"
     )
-    learning_rate = config.train_params["lr_seed"] * pow(config.train_params.get("lr_decay", 0.9), iteration)
+    learning_rate = config.train_params["lr_seed"] * pow(
+        config.train_params["lr_decay"], iteration
+    )
     logging.info(
         f"[*] Training challenger model from {prev_challenger_pth} to {current_challenger_pth} with learning rate {learning_rate}"
     )
@@ -305,11 +312,13 @@ def main():
 
     logging.info("Gomoku AlphaZero Training Curriculum Started")
     logging.info(f"Target End Date: {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    logging.info(f"Starting Iteration: {config.start_iteration}")
+    logging.info(f"Ending Iteration: {config.num_iterations - 1}")
 
     # Initial champion is None for the bootstrapping phase
     history = []
 
-    for i in range(0, config.num_iterations):
+    for i in range(config.start_iteration, config.num_iterations):
         summary = run_iteration(i, config)
         history.append(summary)
 
