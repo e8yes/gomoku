@@ -7,26 +7,11 @@ Run from the python/ directory:
     # → writes model.pt (copy to build/ before running neural_net_evaluator_tests)
 
 Model I/O contract (must match NeuralNetEvaluator / BatchInferenceExecutor):
-    Input:  float32 [batch, 4, 15, 15]
+    Input:  float32 [batch, 9, 15, 15]
     Output: tuple(
         policy_logits  float32 [batch, 230],   # raw logits; C++ applies masking+softmax
         value          float32 [batch, 1],      # tanh-bounded scalar in [-1, 1]
     )
-
-# Architecture: 15-block SE-ResNet, 256 filters.
-# Designed for the RTX 4060 Ti (Ada Lovelace, 8/16 GB VRAM):
-#   - 15 residual blocks × 256 filters provides deeper tactical calculation and
-#     significantly more feature capacity than the original 10x128 design.
-#   - Squeeze-Excitation (SE) attention in each block re-weights channels via global
-#     context at negligible compute cost; empirically improves tactical sharpness.
-#   - Value head uses a 256-unit FC bottleneck.
-#   - Exported via torch.jit.trace for zero-overhead loading in LibTorch (C++).
-#   - During Python self-play / training (Phase 3) wrap with torch.compile() and
-#     torch.autocast("cuda") for high throughput via tensor cores and fused kernels.
-#
-# VRAM estimates (FP32, RTX 4060 Ti with 15x256):
-#     batch=256  →  ~4.0 GB
-#     batch=512  →  ~7.0 GB
 """
 
 import torch
@@ -65,9 +50,7 @@ import time
 #   placing two more stones, etc.). The legal actions and strategy depend heavily
 #   on the current phase. By using explicit scalar planes, the network can condition
 #   its predictions on the current Swap2 state.
-#
-#   Constant planes (all 0s or all 1s) are the standard AlphaZero approach
-#   for injecting scalar game-state information into the convolutional stream.
+
 NUM_INPUT_CHANNELS = 9  # total input channels; see layout above
 BOARD_SIZE = 15
 NUM_ACTIONS = 230  # must match Board::kNumActions (225 cells + 5 Swap2)

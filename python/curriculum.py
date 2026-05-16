@@ -129,7 +129,12 @@ def find_last_champion(export_path: str) -> str:
     champion_pts = glob.glob(os.path.join(export_path, "champion*.pt"))
     if not champion_pts:
         return str()
-    return max(champion_pts)
+
+    # Find the champion with the highest iteration number.
+    return max(
+        champion_pts,
+        key=lambda champion_pt: int(champion_pt.split("champion")[-1].split(".pt")[0]),
+    )
 
 
 def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
