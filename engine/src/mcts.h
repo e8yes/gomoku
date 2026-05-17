@@ -1,5 +1,7 @@
 #pragma once
+
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 #include "board.h"
@@ -81,6 +83,8 @@ class MCTS {
   float c_puct_;
 
   std::unique_ptr<MCTSNode> root_;
+  std::unordered_map<BoardSignature, EvaluationResult, BoardSignatureHash>
+      evaluation_cache_;
 };
 
 // Helper to extract the action ID with the highest probability from a policy.

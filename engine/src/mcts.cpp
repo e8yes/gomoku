@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <unordered_set>
 
 constexpr int kVirtualLoss = 3;
 
@@ -133,9 +134,46 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
       }
     }
 
-    std::vector<EvaluationResult> eval_results;
     if (!leaf_boards.empty()) {
-      eval_results = evaluator->Evaluate(leaf_boards);
+      // Move the cache-missed leaves to their own vector, and copy the rest.
+      std::vector<Board> missed_leaf_boards;
+      std::vector<int> missed_leaf_indices;
+      missed_leaf_boards.reserve(leaf_boards.size());
+      missed_leaf_indices.reserve(leaf_boards.size());
+
+      for (int i = 0; i < leaf_boards.size(); ++i) {
+        if (evaluation_cache_.contains(leaf_boards[i].signature())) {
+          continue;
+        }
+
+        bool already_missed = false;
+        for (const auto& missed_board : missed_leaf_boards) {
+          if (missed_board.signature() == leaf_boards[i].signature()) {
+            already_missed = true;
+            break;
+          }
+        }
+        if (already_missed) {
+          continue;
+        }
+
+        missed_leaf_boards.push_back(std::move(leaf_boards[i]));
+        missed_leaf_indices.push_back(i);
+      }
+
+      if (!missed_leaf_boards.empty()) {
+        // Perform inference for cache misses and deduped leaves.
+        std::vector<EvaluationResult> eval_results =
+            evaluator->Evaluate(missed_leaf_boards);
+        for (size_t i = 0; i < eval_results.size(); ++i) {
+          evaluation_cache_[missed_leaf_boards[i].signature()] = eval_results[i];
+        }
+
+        // Move the inference input back to the original vector.
+        for (size_t i = 0; i < missed_leaf_boards.size(); ++i) {
+          leaf_boards[missed_leaf_indices[i]] = std::move(missed_leaf_boards[i]);
+        }
+      }
     }
 
     for (int i = 0; i < current_batch_size; ++i) {
@@ -145,7 +183,8 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
       if (is_terminal[i]) {
         leaf_val = terminal_values[i];
       } else {
-        const auto& eval_res = eval_results[leaf_indices[i]];
+        const auto& eval_res =
+            evaluation_cache_.at(leaf_boards[leaf_indices[i]].signature());
         paths[i].back()->Expand(leaf_boards[leaf_indices[i]],
                                 eval_res.move_pmf);
         leaf_val = eval_res.value;

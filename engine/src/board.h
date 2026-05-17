@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,17 @@ enum class Result {
 
 const size_t kNumBoardHashes = 2;
 typedef std::array<int64_t, kNumBoardHashes> BoardSignature;
+
+struct BoardSignatureHash {
+  size_t operator()(const BoardSignature& sig) const {
+    size_t hash = 0;
+    hash ^=
+        std::hash<int64_t>{}(sig[0]) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    hash ^=
+        std::hash<int64_t>{}(sig[1]) + 0x9e3779b9 + (hash << 6) + (hash >> 2);
+    return hash;
+  }
+};
 
 struct Action {
   static constexpr int kSwap2ChooseWhite = 225;
