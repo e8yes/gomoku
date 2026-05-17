@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
-#include <unordered_set>
 
 constexpr int kVirtualLoss = 3;
 
@@ -166,12 +165,14 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
         std::vector<EvaluationResult> eval_results =
             evaluator->Evaluate(missed_leaf_boards);
         for (size_t i = 0; i < eval_results.size(); ++i) {
-          evaluation_cache_[missed_leaf_boards[i].signature()] = eval_results[i];
+          evaluation_cache_[missed_leaf_boards[i].signature()] =
+              eval_results[i];
         }
 
         // Move the inference input back to the original vector.
         for (size_t i = 0; i < missed_leaf_boards.size(); ++i) {
-          leaf_boards[missed_leaf_indices[i]] = std::move(missed_leaf_boards[i]);
+          leaf_boards[missed_leaf_indices[i]] =
+              std::move(missed_leaf_boards[i]);
         }
       }
     }
