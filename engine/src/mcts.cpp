@@ -230,4 +230,7 @@ void MCTS::SelectAction(int action_id) {
   }
 }
 
-void MCTS::Reset() { root_ = nullptr; }
+void MCTS::Reset() {
+  root_ = nullptr;
+  evaluation_cache_.clear();
+}
