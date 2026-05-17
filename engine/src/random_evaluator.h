@@ -3,5 +3,5 @@
 
 class RandomEvaluator : public Evaluator {
  public:
-  EvaluationResult Evaluate(const Board& board) override;
+  std::vector<EvaluationResult> Evaluate(const std::vector<Board>& boards) override;
 };

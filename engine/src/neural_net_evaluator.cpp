@@ -89,9 +89,27 @@ NeuralNetEvaluator::NeuralNetEvaluator(
     std::shared_ptr<BatchInferenceExecutor> executor)
     : executor_(std::move(executor)) {}
 
-EvaluationResult NeuralNetEvaluator::Evaluate(const Board& board) {
-  auto future =
-      executor_->Submit(neural_net_evaluator_internal::BoardToTensor(board));
-  auto [policy_logits, value] = future.get();
-  return DecodeOutput(policy_logits, value, board.GetLegalActions());
+std::vector<EvaluationResult> NeuralNetEvaluator::Evaluate(const std::vector<Board>& boards) {
+  if (boards.empty()) return {};
+
+  int batch_size = boards.size();
+  std::vector<torch::Tensor> tensor_list;
+  tensor_list.reserve(batch_size);
+  for (const auto& b : boards) {
+      tensor_list.push_back(neural_net_evaluator_internal::BoardToTensor(b));
+  }
+  
+  // Shape: [batch_size, 9, 15, 15]
+  torch::Tensor batched_input = torch::stack(tensor_list, 0);
+
+  auto future = executor_->Submit(std::move(batched_input));
+  auto [policy_logits, values] = future.get(); // [batch_size, A], [batch_size, 1]
+
+  std::vector<EvaluationResult> results;
+  results.reserve(batch_size);
+  for (int i = 0; i < batch_size; ++i) {
+      results.push_back(DecodeOutput(policy_logits[i], values[i], boards[i].GetLegalActions()));
+  }
+  
+  return results;
 }

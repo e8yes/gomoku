@@ -1,7 +1,7 @@
 #pragma once
-#include <atomic>
+
 #include <memory>
-#include <mutex>
+#include <unordered_map>
 #include <vector>
 
 #include "board.h"
@@ -21,14 +21,10 @@ class MCTSNode {
 
   int action_id() const { return action_id_; }
   float prior_prob() const { return prior_prob_; }
-  int visits() const { return visits_.load(std::memory_order_relaxed); }
-  float value_sum() const { return value_sum_.load(std::memory_order_relaxed); }
-  bool is_expanded() const {
-    return is_expanded_.load(std::memory_order_acquire);
-  }
-  Seat current_player() const {
-    return current_player_;
-  }  // The player who is to move AT this node's board state
+  int visits() const { return visits_; }
+  float value_sum() const { return value_sum_; }
+  bool is_expanded() const { return is_expanded_; }
+  Seat current_player() const { return current_player_; }
 
   void AddVirtualLoss();
   void RevertVirtualLoss();
@@ -37,37 +33,59 @@ class MCTSNode {
     return children_;
   }
 
-  // Use a mutex just for expanding children to ensure thread safety
-  std::mutex expand_mutex_;
+  // Removes and returns the child node corresponding to the given action_id.
+  // Returns nullptr if no such child exists.
+  std::unique_ptr<MCTSNode> DetachChild(int action_id) {
+    for (auto it = children_.begin(); it != children_.end(); ++it) {
+      if ((*it)->action_id() == action_id) {
+        std::unique_ptr<MCTSNode> child = std::move(*it);
+        children_.erase(it);
+        return child;
+      }
+    }
+    return nullptr;
+  }
 
  private:
   int action_id_;
   float prior_prob_;
   Seat current_player_;  // The player to move AT this node
 
-  std::atomic<int> visits_{0};
-  std::atomic<float> value_sum_{0.0f};
-  std::atomic<bool> is_expanded_{false};
+  int visits_{0};
+  float value_sum_{0.0f};
+  bool is_expanded_{false};
 
   std::vector<std::unique_ptr<MCTSNode>> children_;
 };
 
 class MCTS {
  public:
-  MCTS(int num_simulations, int num_threads, float c_puct);
+  // Initializes the MCTS engine with search hyperparameters.
+  MCTS(int num_simulations, int batch_size, float c_puct);
 
-  void Search(const Board& root_board, Evaluator* evaluator);
-  int GetBestMove() const;  // Temperature=0 implicitly
+  // Performs MCTS search from the current root_board and returns the
+  // simulated policy (normalized visit counts for each action).
+  std::vector<float> Search(const Board& root_board, Evaluator* evaluator);
 
+  // Advances the root node to the child corresponding to action_id, preserving
+  // the search tree for future searches. Discards the rest of the tree.
+  void SelectAction(int action_id);
+
+  // Clears the cached search tree.
+  void Reset();
+
+  // Returns the root node of the search tree.
   const MCTSNode* root() const { return root_.get(); }
 
  private:
   int num_simulations_;
-  int num_threads_;
+  int batch_size_;
   float c_puct_;
 
   std::unique_ptr<MCTSNode> root_;
-
-  void SearchOnce(const Board& root_board, Evaluator* evaluator);
-  float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child) const;
+  std::unordered_map<BoardSignature, EvaluationResult, BoardSignatureHash>
+      evaluation_cache_;
 };
+
+// Helper to extract the action ID with the highest probability from a policy.
+int GetBestAction(const std::vector<float>& policy);
