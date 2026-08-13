@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 import torch
-from create_model import BOARD_SIZE, NUM_INPUT_CHANNELS, GomokuNet
+from create_model import BOARD_SIZE, NUM_INPUT_CHANNELS, GomokuNet, compile_aoti_model
 from train import train
 
 
@@ -21,7 +21,7 @@ class CurriculumConfig:
     # PyTorch model path (.pth)
     weights_dir: str = "weights"
 
-    # Torchscript location (.pt)
+    # AOTInductor/Triton model package location (.pt2)
     model_export_path: str = "exported_models"
 
     # Game generator binary
@@ -99,9 +99,12 @@ def get_python_bin():
     return "python3"
 
 
-def export_to_torchscript(weights_path: str, export_path: str):
+def export_to_aoti(weights_path: str, export_path: str):
     """
-    Converts a .pth weight file to a TorchScript .pt file for C++ inference.
+    Converts a .pth weight file to an AOTInductor .pt2 package for C++
+    inference. AOTInductor generates optimized CUDA/Triton kernels while
+    retaining a C++ package-loading interface.
+
     Uses FP16 precision for maximum inference throughput on GPU.
     TODO: Support other GPU devices (ROCm, MPS, XPU, Vulkan, etc.). Do not support CPU.
     """
@@ -114,24 +117,24 @@ def export_to_torchscript(weights_path: str, export_path: str):
     model.load_state_dict(checkpoint)
     model.eval()
 
-    # Use FP16 for export as expected by the C++ engine
-    dummy = torch.zeros(
-        1,
+    # Use an example batch larger than one so Dynamo does not specialize the
+    # exported batch dimension to the constant 1.
+    export_dummy = torch.zeros(
+        2,
         NUM_INPUT_CHANNELS,
         BOARD_SIZE,
         BOARD_SIZE,
         device=device,
         dtype=torch.float16,
     )
-    traced = torch.jit.trace(model, dummy)
-    traced.save(export_path)
-    logging.info(f"Exported {weights_path} to {export_path}")
+    compile_aoti_model(model, export_dummy, export_path)
+    logging.info(f"Exported {weights_path} to AOTInductor package {export_path}")
 
 
 def find_last_champion(export_path: str) -> str:
     """Finds the last champion model."""
     assert os.path.exists(export_path), f"Export path {export_path} does not exist!"
-    champion_pts = glob.glob(os.path.join(export_path, "champion*.pt"))
+    champion_pts = glob.glob(os.path.join(export_path, "champion*.pt2"))
     if not champion_pts:
         return str()
 
@@ -210,9 +213,9 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
 
     # Export the challenger for evaluation/production
     challenger_pt = os.path.join(
-        config.model_export_path, f"challenger{iteration:02d}.pt"
+        config.model_export_path, f"challenger{iteration:02d}.pt2"
     )
-    export_to_torchscript(current_challenger_pth, challenger_pt)
+    export_to_aoti(current_challenger_pth, challenger_pt)
 
     # 3. Evaluation (Champion vs Challenger)
     # We run evaluation games between champion and challenger.
@@ -258,7 +261,7 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
 
     if promoted:
         new_champion_pt = os.path.join(
-            config.model_export_path, f"champion{iteration:02d}.pt"
+            config.model_export_path, f"champion{iteration:02d}.pt2"
         )
         logging.info(f"[+] Challenger promoted! {new_champion_pt}")
         shutil.copy(challenger_pt, new_champion_pt)

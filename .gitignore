@@ -81,6 +81,8 @@ Thumbs.db
 # Python
 venv/
 model.pt
+model.pt2
+*.pt2
 __pycache__/
 
 # Test data

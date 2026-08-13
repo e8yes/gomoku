@@ -5,34 +5,36 @@
 
 namespace {
 
-// Concatenates batched CPU input tensors into a large batch, runs one GPU forward pass,
-// brings outputs back to CPU, and returns one (policy_logits, value) pair per request
-// by slicing the large output batch.
+// Concatenates batched CPU input tensors into a large batch, runs one GPU
+// forward pass, brings outputs back to CPU, and returns one (policy_logits,
+// value) pair per request by slicing the large output batch.
 std::vector<BatchInferenceExecutor::Output> RunBatch(
-    torch::jit::Module& model, torch::Device device,
+    torch::inductor::AOTIModelPackageLoader& model, torch::Device device,
     const std::vector<torch::Tensor>& inputs) {
-  // Concatenate small-batch CPU float32 board tensors → [N_total, C, H, W], move to GPU.
-  // Cast to FP16: the 4060 Ti has a 128-bit memory bus (288 GB/s), making
-  // inference memory-bandwidth-bound. FP16 halves weight traffic per forward
-  // pass and engages the tensor cores, roughly doubling throughput.
+  // Concatenate small-batch CPU float32 board tensors → [N_total, C, H, W],
+  // move to GPU. Cast to FP16: the 4060 Ti has a 128-bit memory bus (288 GB/s),
+  // making inference memory-bandwidth-bound. FP16 halves weight traffic per
+  // forward pass and engages the tensor cores, roughly doubling throughput.
   torch::Tensor batch =
       torch::cat(inputs, /*dim=*/0).to(device).to(torch::kFloat16);
 
-  torch::NoGradGuard no_grad;
-  auto out = model.forward({batch}).toTuple();
+  // AOTIModelPackageLoader::run returns the model's output tensors directly.
+  // The exported model returns policy logits followed by the value tensor.
+  auto outputs = model.run({batch});
+  if (outputs.size() != 2) {
+    throw std::runtime_error(
+        "AOTInductor model must return exactly policy and value tensors");
+  }
 
   // Convert FP16 outputs back to FP32 on CPU so downstream consumers
   // (NeuralNetEvaluator::DecodeOutput) can use float accessors unchanged.
-  torch::Tensor policy =
-      out->elements()[0].toTensor().to(torch::kFloat32).cpu();  // [N_total, A]
-  torch::Tensor values =
-      out->elements()[1].toTensor().to(torch::kFloat32).cpu();  // [N_total, 1]
-
+  torch::Tensor policy = outputs[0].to(torch::kFloat32).cpu();  // [N_total, A]
+  torch::Tensor values = outputs[1].to(torch::kFloat32).cpu();  // [N_total, 1]
 
   const int N = static_cast<int>(inputs.size());
   std::vector<BatchInferenceExecutor::Output> results;
   results.reserve(N);
-  
+
   int offset = 0;
   for (int i = 0; i < N; ++i) {
     int N_i = inputs[i].size(0);
@@ -53,10 +55,12 @@ BatchInferenceExecutor::BatchInferenceExecutor(
     int max_requests, std::chrono::microseconds max_wait_us)
     : device_(device), queue_(max_requests, max_wait_us) {
   try {
-    model_ = torch::jit::load(model_path.string(), device_);
-    model_.eval();
-  } catch (const c10::Error& e) {
-    throw std::runtime_error("Failed to load TorchScript model from '" +
+    // Only the inference loop calls the loader, so disable the package
+    // runner's cross-thread synchronization overhead.
+    model_ = std::make_unique<torch::inductor::AOTIModelPackageLoader>(
+        model_path.string(), "model", /*run_single_threaded=*/true);
+  } catch (const std::exception& e) {
+    throw std::runtime_error("Failed to load AOTInductor model package from '" +
                              model_path.string() + "': " + e.what());
   }
   inference_thread_ = std::thread(&BatchInferenceExecutor::InferenceLoop, this);
@@ -90,7 +94,7 @@ void BatchInferenceExecutor::InferenceLoop() {
     inputs.reserve(batch.size());
     for (const auto& req : batch) inputs.push_back(req->input);
 
-    auto results = RunBatch(model_, device_, inputs);
+    auto results = RunBatch(*model_, device_, inputs);
 
     for (size_t i = 0; i < batch.size(); ++i)
       batch[i]->promise.set_value(std::move(results[i]));
