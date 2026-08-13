@@ -18,6 +18,7 @@ find_package(GTest REQUIRED)
 find_package(Torch REQUIRED)
 find_package(gflags REQUIRED)
 find_package(glog REQUIRED)
+find_package(nlohmann_json REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 enable_testing()
@@ -36,11 +37,10 @@ set(ENGINE_SOURCES
   src/vcf_solver.cpp
   src/game_data.cpp
   src/self_play.cpp
-  src/match_json.cpp
 )
 
 add_library(engine_lib ${ENGINE_SOURCES})
-target_link_libraries(engine_lib "${TORCH_LIBRARIES}" gflags glog)
+target_link_libraries(engine_lib "${TORCH_LIBRARIES}" gflags glog nlohmann_json::nlohmann_json)
 
 # ---------------------------------------------------------------------------
 # Test executable
@@ -57,7 +57,6 @@ add_executable(gomoku_engine_test
   tests/mcts_noise_test.cpp
   tests/game_data_test.cpp
   tests/self_play_test.cpp
-  tests/match_json_test.cpp
 )
 target_link_libraries(gomoku_engine_test engine_lib GTest::gtest_main "${TORCH_LIBRARIES}")
 add_test(NAME gomoku_engine_test COMMAND gomoku_engine_test)
