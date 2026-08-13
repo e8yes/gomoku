@@ -100,11 +100,14 @@ This binary takes in 4 arguments (see `curriculum.py`):
 
 ## 5. Building and Testing
 
-To build the C++ engine and run its unit tests (which require a system installation of `googletest`), run:
+To build the C++ engine and run its unit tests (which require a system installation of `googletest` and PyTorch), run:
 
 ```bash
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ../engine
+# If using a virtual environment with PyTorch:
+cmake -DCMAKE_PREFIX_PATH="../venv/lib/python3.10/site-packages/torch" -DCMAKE_BUILD_TYPE=Release ../engine
+# Or with standard system PyTorch:
+# cmake -DCMAKE_BUILD_TYPE=Release ../engine
 make -j$(nproc)
 ./gomoku_engine_test
 ```
