@@ -90,6 +90,11 @@ class MCTS {
   // Clears the cached search tree.
   void Reset();
 
+  // Changes root-noise behavior for subsequent root expansions. This is used
+  // by evaluation matches to enable exploration for the opening plies and
+  // then switch to deterministic search without discarding the tree cache.
+  void SetDirichletNoise(std::optional<DirichletNoiseConfig> dirichlet_noise);
+
   // Returns the root node of the search tree.
   const MCTSNode* root() const { return root_.get(); }
 

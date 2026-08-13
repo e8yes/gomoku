@@ -33,7 +33,7 @@ set(ENGINE_SOURCES
   src/neural_net_evaluator.cpp
   src/vcf_solver.cpp
   src/game_data.cpp
-  src/seed_game.cpp
+  src/self_play.cpp
 )
 
 add_library(engine_lib ${ENGINE_SOURCES})
@@ -53,14 +53,28 @@ add_executable(gomoku_engine_test
   tests/mcts_endgame_solver_test.cpp
   tests/mcts_noise_test.cpp
   tests/game_data_test.cpp
-  tests/seed_game_test.cpp
+  tests/self_play_test.cpp
 )
 target_link_libraries(gomoku_engine_test engine_lib GTest::gtest_main "${TORCH_LIBRARIES}")
 add_test(NAME gomoku_engine_test COMMAND gomoku_engine_test)
 
 # ---------------------------------------------------------------------------
-# Phase 5 data-seeding executable
+# Phase 5/6 self-play data generator executable
 # ---------------------------------------------------------------------------
 
 add_executable(gomoku_game_generator src/gomoku_game_generator.cpp)
 target_link_libraries(gomoku_game_generator engine_lib "${TORCH_LIBRARIES}")
+add_custom_command(TARGET gomoku_game_generator POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gomoku_game_generator> ${CMAKE_CURRENT_SOURCE_DIR}/../python/
+)
+
+# ---------------------------------------------------------------------------
+# Phase 7 model evaluation executable
+# ---------------------------------------------------------------------------
+
+add_executable(gomoku_model_evaluator src/gomoku_model_evaluator.cpp)
+target_link_libraries(gomoku_model_evaluator engine_lib "${TORCH_LIBRARIES}")
+add_custom_command(TARGET gomoku_model_evaluator POST_BUILD
+  COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gomoku_model_evaluator> ${CMAKE_CURRENT_SOURCE_DIR}/../python/
+)
+

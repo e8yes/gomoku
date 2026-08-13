@@ -333,3 +333,11 @@ void MCTS::Reset() {
   root_ = nullptr;
   evaluation_cache_.clear();
 }
+
+void MCTS::SetDirichletNoise(
+    std::optional<DirichletNoiseConfig> dirichlet_noise) {
+  dirichlet_noise_ = dirichlet_noise;
+  if (dirichlet_noise_ && dirichlet_noise_->seed != 0) {
+    random_engine_.seed(dirichlet_noise_->seed);
+  }
+}

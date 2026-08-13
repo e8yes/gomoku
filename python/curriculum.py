@@ -8,10 +8,6 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-import sys
-
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-
 import torch
 from create_model import BOARD_SIZE, NUM_INPUT_CHANNELS, GomokuNet, compile_aoti_model
 from train import train
@@ -171,8 +167,6 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
 
     if not os.path.exists(config.data_dir):
         os.makedirs(config.data_dir)
-    if not os.path.exists(config.model_export_path):
-        os.makedirs(config.model_export_path)
     assert os.path.exists(config.data_dir), (
         f"Data directory {config.data_dir} does not exist!"
     )
@@ -240,9 +234,10 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
         assert os.path.exists(config.model_evaluator_bin), (
             f"Model evaluator {config.model_evaluator_bin} not found!"
         )
-        stats_file = os.path.join(
-            config.model_export_path, f"model_stats_{iteration:02d}.json"
+        evaluation_dir = os.path.join(
+            config.diagnostics_dir, f"evaluation_{iteration:02d}"
         )
+        stats_file = os.path.join(evaluation_dir, "evaluation.json")
         cmd = [
             config.model_evaluator_bin,
             "--games",
@@ -251,8 +246,8 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
             champion_pt,
             "--challenger_model_path",
             challenger_pt,
-            "--out_file",
-            stats_file,
+            "--out_dir",
+            evaluation_dir,
         ]
         subprocess.run(cmd, check=True)
 

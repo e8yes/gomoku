@@ -85,10 +85,16 @@ model.pt2
 *.pt2
 __pycache__/
 
-# Test data
+# Test data and logs
 test_data/
 data/
 exported_models/
 diagnostics/
 logs/
+
+# Executables copied to python/
+python/gomoku_game_generator
+python/gomoku_model_evaluator
+
+
 
