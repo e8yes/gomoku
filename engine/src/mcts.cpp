@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <random>
 
 constexpr int kVirtualLoss = 3;
 
@@ -24,6 +25,71 @@ float CalculatePUCT(const MCTSNode* parent, const MCTSNode* child,
             (1.0f + child_visits);
 
   return q + u;
+}
+
+bool IsLegalAction(const Board& board, int action_id) {
+  const auto legal_actions = board.GetLegalActions();
+  return std::find(legal_actions.begin(), legal_actions.end(), action_id) !=
+         legal_actions.end();
+}
+
+int GetSolvedAction(const Board& board, const EndgameSolver& endgame_solver) {
+  if (!endgame_solver) return -1;
+
+  const std::vector<int> winning_line = endgame_solver(board);
+  if (winning_line.empty() || !IsLegalAction(board, winning_line.front())) {
+    return -1;
+  }
+  return winning_line.front();
+}
+
+EvaluationResult MakeSolvedEvaluation(int action_id) {
+  EvaluationResult result;
+  result.move_pmf.assign(Board::kNumActions, 0.0f);
+  result.move_pmf[action_id] = 1.0f;
+  result.value = 1.0f;
+  return result;
+}
+
+std::vector<float> MakeSolvedPolicy(int action_id) {
+  std::vector<float> policy(Board::kNumActions, 0.0f);
+  policy[action_id] = 1.0f;
+  return policy;
+}
+
+bool IsValidDirichletNoiseConfig(const DirichletNoiseConfig& config) {
+  return config.alpha > 0.0f && config.epsilon >= 0.0f &&
+         config.epsilon <= 1.0f;
+}
+
+std::vector<float> AddDirichletNoise(const Board& board,
+                                     const std::vector<float>& move_pmf,
+                                     const DirichletNoiseConfig& config,
+                                     std::mt19937_64* random_engine) {
+  if (!IsValidDirichletNoiseConfig(config) || config.epsilon == 0.0f) {
+    return move_pmf;
+  }
+
+  const std::vector<int> legal_actions = board.GetLegalActions();
+  if (legal_actions.empty()) return move_pmf;
+
+  std::gamma_distribution<float> gamma(config.alpha, 1.0f);
+  std::vector<float> noise(legal_actions.size());
+  float noise_sum = 0.0f;
+  for (float& value : noise) {
+    value = gamma(*random_engine);
+    noise_sum += value;
+  }
+  if (noise_sum <= 0.0f) return move_pmf;
+
+  std::vector<float> noisy_move_pmf = move_pmf;
+  const float prior_weight = 1.0f - config.epsilon;
+  for (size_t i = 0; i < legal_actions.size(); ++i) {
+    const int action = legal_actions[i];
+    noisy_move_pmf[action] =
+        prior_weight * move_pmf[action] + config.epsilon * noise[i] / noise_sum;
+  }
+  return noisy_move_pmf;
 }
 
 }  // namespace
@@ -73,12 +139,25 @@ void MCTSNode::RevertVirtualLoss() {
   value_sum_ += static_cast<float>(kVirtualLoss);
 }
 
-MCTS::MCTS(int num_simulations, int batch_size, float c_puct)
+MCTS::MCTS(int num_simulations, int batch_size, float c_puct,
+           std::optional<DirichletNoiseConfig> dirichlet_noise)
     : num_simulations_(num_simulations),
       batch_size_(batch_size),
-      c_puct_(c_puct) {}
+      c_puct_(c_puct),
+      dirichlet_noise_(dirichlet_noise),
+      random_engine_(dirichlet_noise.has_value() && dirichlet_noise->seed != 0
+                         ? dirichlet_noise->seed
+                         : std::random_device{}()) {}
 
-std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
+std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator,
+                                EndgameSolver endgame_solver) {
+  // A proven root win can be returned immediately. This keeps the solver
+  // callback useful even before the MCTS tree has been expanded.
+  const int solved_root_action = GetSolvedAction(root_board, endgame_solver);
+  if (solved_root_action >= 0) {
+    return MakeSolvedPolicy(solved_root_action);
+  }
+
   if (!root_) {
     root_ = std::make_unique<MCTSNode>(-1, 1.0f, root_board.current_player());
   }
@@ -86,6 +165,10 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
   // Evaluate root if not expanded
   if (!root_->is_expanded()) {
     auto res = evaluator->Evaluate({root_board});
+    if (dirichlet_noise_) {
+      res[0].move_pmf = AddDirichletNoise(root_board, res[0].move_pmf,
+                                          *dirichlet_noise_, &random_engine_);
+    }
     root_->Expand(root_board, res[0].move_pmf);
   }
 
@@ -161,12 +244,28 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator) {
       }
 
       if (!missed_leaf_boards.empty()) {
-        // Perform inference for cache misses and deduped leaves.
-        std::vector<EvaluationResult> eval_results =
-            evaluator->Evaluate(missed_leaf_boards);
-        for (size_t i = 0; i < eval_results.size(); ++i) {
-          evaluation_cache_[missed_leaf_boards[i].signature()] =
-              eval_results[i];
+        // Let the endgame solver override evaluator results when it proves a
+        // win. Unsolved leaves are sent to the evaluator in one batch.
+        std::vector<Board> evaluator_boards;
+        evaluator_boards.reserve(missed_leaf_boards.size());
+
+        for (const Board& board : missed_leaf_boards) {
+          const int solved_action = GetSolvedAction(board, endgame_solver);
+          if (solved_action >= 0) {
+            evaluation_cache_[board.signature()] =
+                MakeSolvedEvaluation(solved_action);
+          } else {
+            evaluator_boards.push_back(board);
+          }
+        }
+
+        if (!evaluator_boards.empty()) {
+          std::vector<EvaluationResult> eval_results =
+              evaluator->Evaluate(evaluator_boards);
+          for (size_t i = 0; i < eval_results.size(); ++i) {
+            evaluation_cache_[evaluator_boards[i].signature()] =
+                eval_results[i];
+          }
         }
 
         // Move the inference input back to the original vector.

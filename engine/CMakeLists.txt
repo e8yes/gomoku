@@ -4,8 +4,12 @@ project(gomoku_engine CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -flto=auto")
-set(CMAKE_LINKER_FLAGS_RELEASE "${CMAKE_LINKER_FLAGS_RELEASE} -O3 -flto=auto")
+if(NOT MSVC)
+  set(CMAKE_CXX_FLAGS_RELEASE
+      "${CMAKE_CXX_FLAGS_RELEASE} -O3 -march=native -flto=auto")
+  set(CMAKE_LINKER_FLAGS_RELEASE
+      "${CMAKE_LINKER_FLAGS_RELEASE} -O3 -flto=auto")
+endif()
 
 # ---------------------------------------------------------------------------
 # Dependencies
@@ -27,6 +31,7 @@ set(ENGINE_SOURCES
   src/mcts.cpp
   src/batch_inference_executor.cpp
   src/neural_net_evaluator.cpp
+  src/vcf_solver.cpp
 )
 
 add_library(engine_lib ${ENGINE_SOURCES})
@@ -42,6 +47,9 @@ add_executable(gomoku_engine_test
   tests/retract_test.cpp
   tests/batched_blocking_queue_test.cpp
   tests/neural_net_evaluator_test.cpp
+  tests/vcf_solver_test.cpp
+  tests/mcts_endgame_solver_test.cpp
+  tests/mcts_noise_test.cpp
 )
 target_link_libraries(gomoku_engine_test engine_lib GTest::gtest_main "${TORCH_LIBRARIES}")
 add_test(NAME gomoku_engine_test COMMAND gomoku_engine_test)
