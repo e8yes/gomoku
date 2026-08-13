@@ -4,6 +4,7 @@
 #include <unordered_set>
 
 #include "board.h"
+
 namespace {
 
 constexpr int kDirections[4][2] = {
@@ -186,6 +187,16 @@ Stone ToVcfStone(Player player) {
   return Stone::kEmpty;
 }
 
+Position MakeVcfPosition(const ::Board& board) {
+  Position position(ToVcfStone(board.stone_to_place()));
+  for (int y = 0; y < kVcfBoardSize; ++y) {
+    for (int x = 0; x < kVcfBoardSize; ++x) {
+      position.Set(x, y, ToVcfStone(board.cell(x, y)));
+    }
+  }
+  return position;
+}
+
 }  // namespace
 
 bool Position::Set(int x, int y, Stone stone) {
@@ -230,14 +241,52 @@ std::vector<int> SolveVCF(const Position& position) {
 std::vector<int> SolveVCF(const ::Board& board) {
   if (board.phase() != Phase::kStandard || board.IsTerminal()) return {};
 
-  const Stone current_player = ToVcfStone(board.stone_to_place());
-  if (current_player == Stone::kEmpty) return {};
+  return SolveVCF(MakeVcfPosition(board));
+}
 
-  Position position(current_player);
-  for (int y = 0; y < kVcfBoardSize; ++y) {
-    for (int x = 0; x < kVcfBoardSize; ++x) {
-      position.Set(x, y, ToVcfStone(board.cell(x, y)));
+EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position) {
+  if (position.current_player != Stone::kBlack &&
+      position.current_player != Stone::kWhite) {
+    return {};
+  }
+
+  EndgameDefenseAnalysis analysis;
+  const Stone defender = position.current_player;
+  const Stone attacker = OtherStone(defender);
+
+  // Adding a defender stone can only remove attacker's legal placements; it
+  // cannot create a new forcing line for the attacker. Therefore an empty
+  // opponent-to-move VCF result proves that no candidate defensive move can
+  // expose an opponent VCF, and avoids probing every legal action in ordinary
+  // positions.
+  Position attacker_to_move = position;
+  attacker_to_move.current_player = attacker;
+  if (SolveVCF(attacker_to_move).empty()) return analysis;
+
+  analysis.threat_detected = true;
+
+  for (int action = 0; action < kVcfNumCells; ++action) {
+    if (!position.IsEmpty(action)) continue;
+
+    Position after_defense = position;
+    after_defense.Set(action, defender);
+    after_defense.current_player = attacker;
+
+    // A non-empty line means the candidate move allows the opponent to force
+    // a VCF. A terminal win for the defender naturally returns an empty line
+    // from SolveVCF and is therefore safe.
+    if (SolveVCF(after_defense).empty()) {
+      analysis.safe_actions.push_back(action);
     }
   }
-  return SolveVCF(position);
+
+  return analysis;
+}
+
+EndgameDefenseAnalysis AnalyzeVCFDefense(const ::Board& board) {
+  if (board.phase() != Phase::kStandard || board.IsTerminal()) return {};
+
+  const Position position = MakeVcfPosition(board);
+  if (position.current_player == Stone::kEmpty) return {};
+  return AnalyzeVCFDefense(position);
 }

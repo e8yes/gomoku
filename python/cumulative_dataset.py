@@ -1,105 +1,123 @@
 import glob
+import mmap
 import os
-from typing import Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 
-def _load_all(data_dir: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Loads all training examples from .bin shards into consolidated numpy arrays.
-
-    Flat Binary Format (716 bytes per sample):
-    - packed_state: 254 bytes (bit-packed 9x15x15 = 2025 bits, padded to 2032)
-    - probs:        460 bytes (230 float16 probabilities)
-    - value:        2 bytes   (float16 winner/evaluation)
-    """
-    shard_paths = sorted(glob.glob(os.path.join(data_dir, "*.bin")))
-
-    states_list = []
-    probs_list = []
-    values_list = []
-
-    # Sample size: 254 + 460 + 2 = 716 bytes
-    SAMPLE_SIZE = 716
-
-    for path in shard_paths:
-        try:
-            with open(path, "rb") as f:
-                data = f.read()
-                if len(data) == 0:
-                    continue
-
-                num_samples = len(data) // SAMPLE_SIZE
-                if num_samples == 0:
-                    continue
-
-                # Use structured dtype for zero-copy parsing
-                dtype = np.dtype(
-                    [
-                        ("packed_state", "u1", (254,)),
-                        ("probs", "f2", (230,)),
-                        ("value", "f2"),
-                    ]
-                )
-                samples = np.frombuffer(data, dtype=dtype, count=num_samples)
-
-                # We copy to avoid keeping the entire file buffer in memory via views
-                states_list.append(samples["packed_state"].copy())
-                probs_list.append(samples["probs"].copy())
-                values_list.append(samples["value"].copy())
-
-        except Exception as e:
-            print(f"Error loading {path}: {e}")
-
-    if not states_list:
-        return (
-            np.empty((0, 254), dtype=np.uint8),
-            np.empty((0, 230), dtype=np.float16),
-            np.empty((0,), dtype=np.float16),
-        )
-
-    return (
-        np.concatenate(states_list, axis=0),
-        np.concatenate(probs_list, axis=0),
-        np.concatenate(values_list, axis=0),
-    )
+# Flat Binary Format (716 bytes per sample):
+# - packed_state: 254 bytes (bit-packed 9x15x15 = 2025 bits, padded to 2032)
+# - probs:        460 bytes (230 float16 probabilities)
+# - value:        2 bytes   (float16 winner/evaluation)
+SAMPLE_SIZE = 716
+DEFAULT_ITERATION_WINDOW = 4
+RECORD_DTYPE = np.dtype(
+    [
+        ("packed_state", "u1", (254,)),
+        ("probs", "f2", (230,)),
+        ("value", "f2"),
+    ]
+)
 
 
 class GomokuDataset(Dataset):
     """
     Cumulative dataset for Gomoku training.
-    Uses consolidated numpy arrays for high performance and low memory overhead.
+    Indexes shards without loading the cumulative dataset into RAM. Each worker
+    lazily memory-maps the shards it reads, keeping memory bounded even after
+    many curriculum iterations.
     """
 
     def __init__(
         self,
         data_dir: str,
         augment: bool = True,
+        iteration_window: int | None = None,
     ):
         self.data_dir = data_dir
         self.augment = augment
 
+        if iteration_window is not None and iteration_window <= 0:
+            raise ValueError("iteration_window must be positive")
+
         if not os.path.exists(data_dir):
             os.makedirs(data_dir)
 
-        # Load all shards into flat numpy arrays
-        self.packed_states, self.probs, self.values = _load_all(data_dir)
+        shard_paths = sorted(glob.glob(os.path.join(data_dir, "*.bin")))
+        if iteration_window is not None:
+            shard_paths = shard_paths[-iteration_window:]
+
+        self.shard_paths: List[str] = []
+        shard_counts: List[int] = []
+        for path in shard_paths:
+            size = os.path.getsize(path)
+            count, remainder = divmod(size, SAMPLE_SIZE)
+            if remainder:
+                raise ValueError(
+                    f"Shard {path} has {remainder} trailing bytes; "
+                    f"expected records of {SAMPLE_SIZE} bytes"
+                )
+            if count:
+                self.shard_paths.append(path)
+                shard_counts.append(count)
+
+        self.shard_counts = shard_counts
+        self.shard_ends = np.cumsum(np.asarray(shard_counts, dtype=np.int64))
+        self._mapped_files: Dict[int, object] = {}
+        self._mapped_shards: Dict[int, mmap.mmap] = {}
 
     def __len__(self):
-        return len(self.values)
+        if len(self.shard_ends) == 0:
+            return 0
+        return int(self.shard_ends[-1])
+
+    def _get_shard(self, shard_index: int) -> mmap.mmap:
+        mapped = self._mapped_shards.get(shard_index)
+        if mapped is None:
+            file_handle = open(self.shard_paths[shard_index], "rb")
+            mapped = mmap.mmap(file_handle.fileno(), 0, access=mmap.ACCESS_READ)
+            self._mapped_files[shard_index] = file_handle
+            self._mapped_shards[shard_index] = mapped
+        return mapped
+
+    def __getstate__(self):
+        # mmap/file handles cannot be serialized by spawn-based DataLoaders.
+        state = self.__dict__.copy()
+        state["_mapped_files"] = {}
+        state["_mapped_shards"] = {}
+        return state
+
+    def __del__(self):
+        for mapped in getattr(self, "_mapped_shards", {}).values():
+            mapped.close()
+        for file_handle in getattr(self, "_mapped_files", {}).values():
+            file_handle.close()
 
     def __getitem__(self, idx):
+        if idx < 0:
+            idx += len(self)
+        if idx < 0 or idx >= len(self):
+            raise IndexError(idx)
+
+        shard_index = int(np.searchsorted(self.shard_ends, idx, side="right"))
+        shard_start = 0 if shard_index == 0 else int(self.shard_ends[shard_index - 1])
+        record_offset = (idx - shard_start) * SAMPLE_SIZE
+        mapped = self._get_shard(shard_index)
+        record = np.frombuffer(
+            mapped, dtype=RECORD_DTYPE, count=1, offset=record_offset
+        )[0]
+
         # 1. Unpack state: 254 bytes -> 2032 bits -> 2025 bits -> (9, 15, 15)
-        packed_state = self.packed_states[idx]
+        packed_state = record["packed_state"].copy()
         state_bits = np.unpackbits(packed_state)[:2025]
         state = state_bits.reshape(9, 15, 15).astype(np.float32)
 
         # 2. Extract policy and value
-        prob = self.probs[idx].astype(np.float32)
-        value = np.array([self.values[idx]], dtype=np.float32)
+        prob = record["probs"].astype(np.float32)
+        value = np.array([record["value"]], dtype=np.float32)
 
         # 3. Apply augmentation
         if self.augment:

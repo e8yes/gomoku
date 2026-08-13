@@ -209,6 +209,20 @@ TEST(VcfSolverTest, RejectsPositionWithoutAForcingMove) {
   EXPECT_TRUE(SolveVCF(position).empty());
 }
 
+TEST(VcfSolverTest, OpenThreeHasExactlyTwoDefensiveEndpointMoves) {
+  Position position(Stone::kBlack);
+  Put(&position, Stone::kWhite, {{5, 7}, {6, 7}, {7, 7}});
+
+  // White's open three is not an immediate win, but leaving both endpoints
+  // open lets White play one endpoint and create a double-four VCF.
+  const EndgameDefenseAnalysis analysis = AnalyzeVCFDefense(position);
+
+  ASSERT_TRUE(analysis.threat_detected);
+  ASSERT_EQ(analysis.safe_actions.size(), 2u);
+  EXPECT_EQ(analysis.safe_actions[0], VcfActionFromXY(4, 7));
+  EXPECT_EQ(analysis.safe_actions[1], VcfActionFromXY(8, 7));
+}
+
 TEST(VcfSolverTest, RejectsEveryBranchWhenDefenderCanCounterWin) {
   Position position(Stone::kBlack);
   Put(&position, Stone::kBlack, {{3, 7}, {4, 7}, {5, 7}});

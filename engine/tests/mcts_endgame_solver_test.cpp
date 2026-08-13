@@ -62,6 +62,27 @@ Board MakeStandardBlackToMove() {
   return board;
 }
 
+Board MakeStandardBlackToMoveWithWhiteOpenThree() {
+  Board board;
+  board.Apply(Action::FromXY(0, 0).id);  // Initial black stone.
+  board.Apply(Action::FromXY(1, 0).id);  // Initial white stone.
+  board.Apply(Action::FromXY(2, 0).id);  // Initial black stone.
+  board.Apply(Action::kSwap2ChooseBlack);
+
+  // Start standard play with one quiet White move, then add White's open
+  // three while preserving Black's turn at the root. The Black placements
+  // are deliberately scattered and create no forcing line of their own.
+  board.Apply(Action::FromXY(10, 10).id);  // A white.
+  board.Apply(Action::FromXY(14, 14).id);  // B black.
+  board.Apply(Action::FromXY(5, 7).id);    // A white.
+  board.Apply(Action::FromXY(14, 12).id);  // B black.
+  board.Apply(Action::FromXY(6, 7).id);    // A white.
+  board.Apply(Action::FromXY(12, 14).id);  // B black.
+  board.Apply(Action::FromXY(7, 7).id);    // A white.
+
+  return board;
+}
+
 }  // namespace
 
 TEST(MCTSEndgameSolverTest, AcceptsFreeFunctionBoardAdapter) {
@@ -69,19 +90,76 @@ TEST(MCTSEndgameSolverTest, AcceptsFreeFunctionBoardAdapter) {
   ASSERT_EQ(board.phase(), Phase::kStandard);
   ASSERT_EQ(board.stone_to_place(), Player::kBlack);
 
-  CountingEvaluator evaluator;
+  RandomEvaluator evaluator;
   EndgameSolver solver = [](const Board& candidate) {
     return SolveVCF(candidate);
   };
 
-  MCTS mcts(8, 4, 1.0f);
-  const std::vector<float> policy = mcts.Search(board, &evaluator, solver);
+  MCTS mcts(4, 1.0f);
+  const std::vector<float> policy =
+      mcts.Search(board, &evaluator, SearchStoppingCriteria{8}, solver);
 
   const int winning_action = Action::FromXY(4, 1).id;
   ASSERT_EQ(policy.size(), static_cast<std::size_t>(Board::kNumActions));
   EXPECT_FLOAT_EQ(policy[winning_action], 1.0f);
   EXPECT_EQ(GetBestAction(policy), winning_action);
-  EXPECT_EQ(evaluator.calls, 0);
+}
+
+TEST(MCTSEndgameSolverTest, DoesNotGenerateDefenseWithoutDefensiveCallback) {
+  Board board = MakeStandardBlackToMoveWithWhiteOpenThree();
+  ASSERT_EQ(board.phase(), Phase::kStandard);
+  ASSERT_EQ(board.stone_to_place(), Player::kBlack);
+
+  // The current callback proves wins for the side to move. It does not turn
+  // White's open three into a forced Black defense at the root.
+  ASSERT_TRUE(SolveVCF(board).empty());
+
+  CountingEvaluator evaluator;
+  EndgameSolver solver = [](const Board& candidate) {
+    return SolveVCF(candidate);
+  };
+
+  // With one deterministic simulation, a defensive tactical override would
+  // need to select one of the two endpoints. The current MCTS shape instead
+  // falls through to the evaluator and visits the first legal root action.
+  MCTS mcts(1, 1.0f);
+  const std::vector<float> policy =
+      mcts.Search(board, &evaluator, SearchStoppingCriteria{1}, solver);
+
+  const int left_defense = Action::FromXY(4, 7).id;
+  const int right_defense = Action::FromXY(8, 7).id;
+  ASSERT_EQ(policy.size(), static_cast<std::size_t>(Board::kNumActions));
+  EXPECT_FLOAT_EQ(policy[left_defense], 0.0f);
+  EXPECT_FLOAT_EQ(policy[right_defense], 0.0f);
+  EXPECT_NE(GetBestAction(policy), left_defense);
+  EXPECT_NE(GetBestAction(policy), right_defense);
+  EXPECT_GT(evaluator.calls, 0);
+}
+
+TEST(MCTSEndgameSolverTest, DefensiveVcfCallbackMasksWhiteOpenThreeThreat) {
+  Board board = MakeStandardBlackToMoveWithWhiteOpenThree();
+  CountingEvaluator evaluator;
+  EndgameSolver solver = [](const Board& candidate) {
+    return SolveVCF(candidate);
+  };
+  EndgameDefenseSolver defensive_solver = [](const Board& candidate) {
+    return AnalyzeVCFDefense(candidate);
+  };
+
+  MCTS mcts(1, 1.0f);
+  const std::vector<float> policy = mcts.Search(
+      board, &evaluator, SearchStoppingCriteria{1}, solver, defensive_solver);
+
+  const int left_defense = Action::FromXY(4, 7).id;
+  const int right_defense = Action::FromXY(8, 7).id;
+  ASSERT_EQ(policy.size(), static_cast<std::size_t>(Board::kNumActions));
+  EXPECT_EQ(GetBestAction(policy), left_defense);
+  EXPECT_FLOAT_EQ(policy[left_defense], 1.0f);
+  EXPECT_FLOAT_EQ(policy[right_defense], 0.0f);
+  for (int action : board.GetLegalActions()) {
+    if (action == left_defense || action == right_defense) continue;
+    EXPECT_FLOAT_EQ(policy[action], 0.0f);
+  }
 }
 
 TEST(MCTSEndgameSolverTest, UnsolvedCallbackFallsBackToEvaluator) {
@@ -89,8 +167,8 @@ TEST(MCTSEndgameSolverTest, UnsolvedCallbackFallsBackToEvaluator) {
   CountingEvaluator evaluator;
   EndgameSolver solver = [](const Board&) { return std::vector<int>{}; };
 
-  MCTS mcts(1, 1, 1.0f);
-  mcts.Search(board, &evaluator, solver);
+  MCTS mcts(1, 1.0f);
+  mcts.Search(board, &evaluator, SearchStoppingCriteria{1}, solver);
 
   EXPECT_GT(evaluator.calls, 0);
   EXPECT_GT(evaluator.evaluated_boards, 0u);
@@ -113,8 +191,8 @@ TEST(MCTSEndgameSolverTest, SolvedLeafOverridesPolicyAndValue) {
   };
 
   CountingEvaluator evaluator;
-  MCTS mcts(1, 1, 1.0f);
-  mcts.Search(board, &evaluator, solver);
+  MCTS mcts(1, 1.0f);
+  mcts.Search(board, &evaluator, SearchStoppingCriteria{1}, solver);
 
   EXPECT_GE(solver_calls, 2);
   EXPECT_EQ(evaluator.calls, 1);  // Root only; the leaf was solved.

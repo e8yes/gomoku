@@ -14,7 +14,55 @@ from typing import Tuple
 from create_model import GomokuNet
 
 # Dataset
-from cumulative_dataset import GomokuDataset
+from cumulative_dataset import (
+    DEFAULT_ITERATION_WINDOW,
+    GomokuDataset,
+)
+
+
+def _assert_fp32_model(model: nn.Module):
+    """Fail fast if training parameters or floating-point buffers are not FP32."""
+    for name, parameter in model.named_parameters():
+        assert parameter.dtype == torch.float32, (
+            f"Training parameter {name} must be float32, got {parameter.dtype}"
+        )
+    for name, buffer in model.named_buffers():
+        if buffer.is_floating_point():
+            assert buffer.dtype == torch.float32, (
+                f"Training buffer {name} must be float32, got {buffer.dtype}"
+            )
+
+
+def _assert_fp32_tensor(tensor: torch.Tensor, name: str):
+    """Fail fast if a training input, target, or output is not FP32."""
+    assert tensor.dtype == torch.float32, (
+        f"Training tensor {name} must be float32, got {tensor.dtype}"
+    )
+
+
+def _assert_fp32_optimizer_state(optimizer: optim.Optimizer):
+    """Ensure floating-point optimizer state remains in FP32."""
+    for state in optimizer.state.values():
+        for name, tensor in state.items():
+            if torch.is_tensor(tensor) and tensor.is_floating_point():
+                assert tensor.dtype == torch.float32, (
+                    f"Optimizer state {name} must be float32, got {tensor.dtype}"
+                )
+
+
+def _build_loader(
+    dataset: GomokuDataset,
+    batch_size: int,
+    shuffle: bool,
+) -> DataLoader:
+    """Build a uniform loader over the selected iteration window."""
+    return DataLoader(
+        dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=4,
+        pin_memory=True,
+    )
 
 
 def setup_logging():
@@ -47,15 +95,20 @@ def _train_epoch(
     """
     model.train()
     pbar = tqdm(loader, desc=f"Epoch {epoch}/{total_epochs}")
-    for states, target_probs, target_values in pbar:
+    for batch_index, (states, target_probs, target_values) in enumerate(pbar):
         states = states.to(device)
         target_probs = target_probs.to(device)
         target_values = target_values.to(device)
+        _assert_fp32_tensor(states, "states")
+        _assert_fp32_tensor(target_probs, "target_probs")
+        _assert_fp32_tensor(target_values, "target_values")
 
         optimizer.zero_grad()
 
         # Forward pass
         out_probs, out_values = model(states)
+        _assert_fp32_tensor(out_probs, "policy_logits")
+        _assert_fp32_tensor(out_values, "values")
 
         # Losses
         # Policy: CrossEntropy (out_probs are logits)
@@ -69,6 +122,8 @@ def _train_epoch(
         total_loss.backward()
         optimizer.step()
         scheduler.step()
+        if epoch == 1 and batch_index == 0:
+            _assert_fp32_optimizer_state(optimizer)
 
         pbar.set_postfix(
             {
@@ -105,8 +160,13 @@ def _evaluate_model(
             states = states.to(device)
             target_probs = target_probs.to(device)
             target_values = target_values.to(device)
+            _assert_fp32_tensor(states, "states")
+            _assert_fp32_tensor(target_probs, "target_probs")
+            _assert_fp32_tensor(target_values, "target_values")
 
             out_probs, out_values = model(states)
+            _assert_fp32_tensor(out_probs, "policy_logits")
+            _assert_fp32_tensor(out_values, "values")
 
             pi_loss = nn.functional.cross_entropy(out_probs, target_probs)
             v_loss = nn.functional.mse_loss(out_values, target_values)
@@ -136,6 +196,7 @@ def train(
     batch_size: int = 256,
     epochs: int = 5,
     lr: float = 1e-3,
+    iteration_window: int = DEFAULT_ITERATION_WINDOW,
 ) -> Tuple[float, float]:
     """
     Trains the Gomoku neural network using a ResNet architecture and the
@@ -148,22 +209,40 @@ def train(
         batch_size (int): Number of samples per training batch.
         epochs (int): Number of full passes over the dataset.
         lr (float): Maximum learning rate for the OneCycleLR scheduler.
+        iteration_window (int): Number of newest iteration shards included in
+            the training and validation views.
 
     Returns:
         Tuple[float, float]: Average (policy_loss, value_loss) over 100 sampled batches.
     """
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logging.info(f"Training on {device} in pure bfloat16...")
+    logging.info(f"Training on {device} in FP32...")
+    logging.info(
+        "Training and validation use only the newest %d iteration shards",
+        iteration_window,
+    )
 
     # 1. Load Dataset
-    dataset = GomokuDataset(data_dir, augment=True)
-    if len(dataset) == 0:
+    train_dataset = GomokuDataset(
+        data_dir, augment=True, iteration_window=iteration_window
+    )
+    if len(train_dataset) == 0:
         logging.error(f"No data found in {data_dir}")
         return 0.0, 0.0
 
-    loader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True
+    train_loader = _build_loader(
+        train_dataset,
+        batch_size=batch_size,
+        shuffle=True,
+    )
+    validation_dataset = GomokuDataset(
+        data_dir, augment=False, iteration_window=iteration_window
+    )
+    validation_loader = _build_loader(
+        validation_dataset,
+        batch_size=batch_size,
+        shuffle=True,
     )
 
     # 2. Initialize Model
@@ -180,18 +259,20 @@ def train(
                 f"load_path {load_path} specified but not found. Starting from scratch."
             )
 
+    _assert_fp32_model(model)
+
     # 3. Optimizer & Scheduler
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
     # OneCycleLR is great for AlphaZero-style training
     scheduler = optim.lr_scheduler.OneCycleLR(
-        optimizer, max_lr=lr, steps_per_epoch=len(loader), epochs=epochs
+        optimizer, max_lr=lr, steps_per_epoch=len(train_loader), epochs=epochs
     )
 
     # 4. Training Loop
     for epoch in range(1, epochs + 1):
         _train_epoch(
             model=model,
-            loader=loader,
+            loader=train_loader,
             optimizer=optimizer,
             scheduler=scheduler,
             device=device,
@@ -204,7 +285,9 @@ def train(
     logging.info(f"Model saved to {save_path}")
 
     # 6. Evaluation (Sample 100 batches)
-    avg_pi_loss, avg_v_loss = _evaluate_model(model, loader, device, num_batches=100)
+    avg_pi_loss, avg_v_loss = _evaluate_model(
+        model, validation_loader, device, num_batches=100
+    )
     logging.info(
         f"Validation Loss - Policy: {avg_pi_loss:.4f}, Value: {avg_v_loss:.4f}"
     )
@@ -223,6 +306,9 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument(
+        "--iteration-window", type=int, default=DEFAULT_ITERATION_WINDOW
+    )
 
     args = parser.parse_args()
     setup_logging()
@@ -233,4 +319,5 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         epochs=args.epochs,
         lr=args.lr,
+        iteration_window=args.iteration_window,
     )

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <memory>
 #include <optional>
 #include <random>
 #include <unordered_map>
+#include <variant>
 #include <vector>
 
 #include "board.h"
@@ -18,6 +20,13 @@ struct DirichletNoiseConfig {
   float epsilon = 0.25f;
   std::uint64_t seed = 0;  // Zero selects a nondeterministic seed.
 };
+
+// Search limits are selected per invocation. A simulation count is useful for
+// deterministic self-play and tests; a duration lets a match client spend
+// the available clock without retaining a hidden fixed simulation cap in the
+// persistent MCTS object.
+using SearchStoppingCriteria =
+    std::variant<int, std::chrono::milliseconds>;
 
 class MCTSNode {
  public:
@@ -33,13 +42,17 @@ class MCTSNode {
 
   int action_id() const { return action_id_; }
   float prior_prob() const { return prior_prob_; }
+  void set_prior_prob(float prior_prob) { prior_prob_ = prior_prob; }
   int visits() const { return visits_; }
   float value_sum() const { return value_sum_; }
   bool is_expanded() const { return is_expanded_; }
   Seat current_player() const { return current_player_; }
 
-  void AddVirtualLoss();
-  void RevertVirtualLoss();
+  // Applies a temporary loss from `selecting_player`'s perspective. Node
+  // values are stored from current_player(), so the sign depends on whether
+  // a Swap2 action changed the player to move.
+  void AddVirtualLoss(Seat selecting_player, int virtual_loss);
+  void RevertVirtualLoss(Seat selecting_player, int virtual_loss);
 
   const std::vector<std::unique_ptr<MCTSNode>>& children() const {
     return children_;
@@ -72,16 +85,20 @@ class MCTSNode {
 
 class MCTS {
  public:
-  // Initializes the MCTS engine with search hyperparameters.
-  MCTS(int num_simulations, int batch_size, float c_puct,
-       std::optional<DirichletNoiseConfig> dirichlet_noise = std::nullopt);
+  // Initializes the persistent MCTS engine with search hyperparameters.
+  MCTS(int batch_size, float c_puct,
+       std::optional<DirichletNoiseConfig> dirichlet_noise = std::nullopt,
+       int virtual_loss = 3);
 
   // Performs MCTS search from the current root_board and returns the
   // simulated policy (normalized visit counts for each action). When an
   // endgame solver is supplied, a proven root win is returned immediately and
-  // proven leaf wins override neural evaluation.
+  // proven leaf wins override neural evaluation. An optional defensive solver
+  // can mask root actions that expose the opponent to a proven VCF.
   std::vector<float> Search(const Board& root_board, Evaluator* evaluator,
-                            EndgameSolver endgame_solver = {});
+                            SearchStoppingCriteria stopping_criteria,
+                            EndgameSolver endgame_solver = {},
+                            EndgameDefenseSolver defensive_solver = {});
 
   // Advances the root node to the child corresponding to action_id, preserving
   // the search tree for future searches. Discards the rest of the tree.
@@ -90,20 +107,34 @@ class MCTS {
   // Clears the cached search tree.
   void Reset();
 
-  // Changes root-noise behavior for subsequent root expansions. This is used
-  // by evaluation matches to enable exploration for the opening plies and
-  // then switch to deterministic search without discarding the tree cache.
+  // Changes root-noise behavior for subsequent active roots. This is used by
+  // evaluation matches to enable exploration for the opening plies and then
+  // switch to deterministic search without discarding the tree cache.
   void SetDirichletNoise(std::optional<DirichletNoiseConfig> dirichlet_noise);
 
   // Returns the root node of the search tree.
   const MCTSNode* root() const { return root_.get(); }
 
  private:
-  int num_simulations_;
+  void ApplyRootNoise(const Board& root_board);
+  void ApplyDefensiveFilter(const Board& root_board,
+                            const EndgameDefenseSolver& defensive_solver);
+
   int batch_size_;
   float c_puct_;
+  int virtual_loss_;
   std::optional<DirichletNoiseConfig> dirichlet_noise_;
   std::mt19937_64 random_engine_;
+  // Self-play keeps this enabled after root noise is disabled so exact PUCT
+  // ties cannot fall back to the board's row-major action order. MCTS remains
+  // deterministic when it was constructed without exploration enabled.
+  bool randomize_ties_{false};
+  bool root_noise_applied_{false};
+  bool defensive_filter_applied_{false};
+  // True only when the defensive callback identified a threat and supplied
+  // safe root moves. Zero-prior unsafe children must then be excluded from
+  // selection, rather than merely discouraged.
+  bool root_defensive_mask_active_{false};
 
   std::unique_ptr<MCTSNode> root_;
   std::unordered_map<BoardSignature, EvaluationResult, BoardSignatureHash>

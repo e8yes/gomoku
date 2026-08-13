@@ -1,4 +1,5 @@
 import datetime
+import argparse
 import json
 import logging
 import os
@@ -38,10 +39,26 @@ class CurriculumConfig:
     num_iterations: int = 50
 
     # Games per iteration
-    games_per_iteration: int = 9000
+    games_per_iteration: int = 10000
+
+    # Fraction of games played against the previous promoted champion. Only
+    # the current champion's decision positions are retained from these games.
+    previous_champion_mix_fraction: float = 0.20
+
+    # MCTS simulations per move during self-play and promotion evaluation.
+    simulations_per_move: int = 800
 
     # Games per evaluation
-    games_per_evaluation: int = 100
+    games_per_evaluation: int = 200
+
+    # Keep the VCF attacker/defender callbacks out of the early bootstrap
+    # curriculum. This threshold is controlled by the schedule rather than
+    # hard-coded in the C++ executables.
+    endgame_solver_start_iteration: int = 20
+
+    # Use a compact recent window after promotion, expanding it by one shard
+    # for every consecutive failed challenger.
+    base_training_window_iterations: int = 4
 
     # Minimum promotion win rate
     min_promotion_win_rate: float = 0.55
@@ -52,7 +69,7 @@ class CurriculumConfig:
             "batch_size": 512,
             "epochs": 1,
             "lr_seed": 0.01,
-            "lr_decay": 0.9,
+            "lr_decay": 0.93,
         }
     )
 
@@ -62,7 +79,19 @@ class CurriculumConfig:
             return cls()
         with open(path, "r") as f:
             data = json.load(f)
-        return cls(**data)
+        config = cls(**data)
+        if config.games_per_evaluation <= 0 or config.games_per_evaluation % 2:
+            raise ValueError(
+                "games_per_evaluation must be a positive even number so seats "
+                "are balanced"
+            )
+        if config.base_training_window_iterations <= 0:
+            raise ValueError("base_training_window_iterations must be positive")
+        if not 0.0 <= config.previous_champion_mix_fraction <= 1.0:
+            raise ValueError(
+                "previous_champion_mix_fraction must be between zero and one"
+            )
+        return config
 
     def save(self, path: str):
         with open(path, "w") as f:
@@ -76,6 +105,7 @@ class IterationSummary:
     value_loss: float = 0.0
     win_rate: float = 0.0
     promoted: bool = False
+    training_window: int = 0
 
 
 def setup_logging():
@@ -145,8 +175,58 @@ def find_last_champion(export_path: str) -> str:
     # Find the champion with the highest iteration number.
     return max(
         champion_pts,
-        key=lambda cp: int("".join(filter(str.isdigit, os.path.basename(cp))) or -1),
+        key=model_iteration,
     )
+
+
+def find_previous_champion(export_path: str) -> str:
+    """Find the promoted champion immediately preceding the current one."""
+    champion_pts = sorted(
+        glob.glob(os.path.join(export_path, "champion*.pt2")),
+        key=model_iteration,
+    )
+    return champion_pts[-2] if len(champion_pts) >= 2 else str()
+
+
+def model_iteration(path: str) -> int:
+    """Extract the numeric curriculum iteration from a model filename."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    digits = "".join(filter(str.isdigit, stem))
+    if not digits:
+        raise ValueError(f"Model path has no iteration number: {path}")
+    return int(digits)
+
+
+def find_champion_training_weights(export_path: str, champion_pt: str) -> str:
+    """Find the FP32 checkpoint corresponding to the deployed champion."""
+    if not champion_pt:
+        return str()
+    iteration = model_iteration(champion_pt)
+    champion_pth = os.path.join(export_path, f"champion{iteration:02d}.pth")
+    if os.path.exists(champion_pth):
+        return champion_pth
+
+    # Compatibility with runs created before champion FP32 checkpoints were
+    # copied explicitly: the promoted challenger has identical weights.
+    challenger_pth = os.path.join(export_path, f"challenger{iteration:02d}.pth")
+    if os.path.exists(challenger_pth):
+        return challenger_pth
+    raise FileNotFoundError(
+        f"No FP32 checkpoint found for champion iteration {iteration}"
+    )
+
+
+def adaptive_training_window(
+    iteration: int, champion_pt: str, base_window: int
+) -> int:
+    """Expand the recent-shard window once per prior promotion failure."""
+    if base_window <= 0:
+        raise ValueError("base_window must be positive")
+    if not champion_pt:
+        return base_window
+    champion_iteration = model_iteration(champion_pt)
+    failures_since_promotion = max(0, iteration - champion_iteration - 1)
+    return base_window + failures_since_promotion
 
 
 def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
@@ -180,22 +260,55 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
         str(config.games_per_iteration),
         "--iteration",
         str(iteration),
+        "--simulations",
+        str(config.simulations_per_move),
         "--out_dir",
         config.data_dir,
     ]
 
+    use_endgame_solver = iteration >= config.endgame_solver_start_iteration
+    logging.info(
+        "[*] Endgame solver: %s (enabled from iteration %d)",
+        "enabled" if use_endgame_solver else "disabled",
+        config.endgame_solver_start_iteration,
+    )
+    if not use_endgame_solver:
+        cmd.append("--disable_endgame_solver")
+
     # Only pass models if they actually exist (Iteration 0 will pass none)
     champion_pt = find_last_champion(config.model_export_path)
     if os.path.exists(champion_pt):
+        logging.info("[*] Self-play model: current champion %s", champion_pt)
         cmd.extend(["--champion_model_path", champion_pt])
+        previous_champion_pt = find_previous_champion(config.model_export_path)
+        if previous_champion_pt and config.previous_champion_mix_fraction > 0.0:
+            logging.info(
+                "[*] Previous-champion mix: %.1f%% against %s; retaining only "
+                "current-champion positions",
+                config.previous_champion_mix_fraction * 100.0,
+                previous_champion_pt,
+            )
+            cmd.extend(
+                [
+                    "--previous_champion_model_path",
+                    previous_champion_pt,
+                    "--previous_champion_mix_fraction",
+                    str(config.previous_champion_mix_fraction),
+                ]
+            )
+        else:
+            logging.info("[*] Previous-champion mix unavailable")
+    else:
+        logging.info("[*] Self-play model: RandomEvaluator bootstrap")
 
     subprocess.run(cmd, check=True)
 
     # 2. Train Model (Challenger)
-    prev_challenger_pth = (
-        os.path.join(config.model_export_path, f"challenger{iteration - 1:02d}.pth")
-        if iteration > 0
-        else None
+    champion_pth = find_champion_training_weights(
+        config.model_export_path, champion_pt
+    )
+    training_window = adaptive_training_window(
+        iteration, champion_pt, config.base_training_window_iterations
     )
     current_challenger_pth = os.path.join(
         config.model_export_path, f"challenger{iteration:02d}.pth"
@@ -204,15 +317,21 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
         config.train_params["lr_decay"], iteration
     )
     logging.info(
-        f"[*] Training challenger model from {prev_challenger_pth} to {current_challenger_pth} with learning rate {learning_rate}"
+        "[*] Training challenger from current champion %s to %s with learning "
+        "rate %s using the newest %d iteration shards",
+        champion_pth or "<fresh initialization>",
+        current_challenger_pth,
+        learning_rate,
+        training_window,
     )
     pi_loss, v_loss = train(
         data_dir=config.data_dir,
-        load_path=prev_challenger_pth,
+        load_path=champion_pth or None,
         save_path=current_challenger_pth,
         batch_size=config.train_params["batch_size"],
         epochs=config.train_params["epochs"],
         lr=learning_rate,
+        iteration_window=training_window,
     )
 
     # Export the challenger for evaluation/production
@@ -242,6 +361,8 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
             config.model_evaluator_bin,
             "--games",
             str(config.games_per_evaluation),
+            "--simulations",
+            str(config.simulations_per_move),
             "--champion_model_path",
             champion_pt,
             "--challenger_model_path",
@@ -249,6 +370,8 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
             "--out_dir",
             evaluation_dir,
         ]
+        if not use_endgame_solver:
+            cmd.append("--disable_endgame_solver")
         subprocess.run(cmd, check=True)
 
         assert os.path.exists(stats_file), (
@@ -268,8 +391,12 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
         new_champion_pt = os.path.join(
             config.model_export_path, f"champion{iteration:02d}.pt2"
         )
+        new_champion_pth = os.path.join(
+            config.model_export_path, f"champion{iteration:02d}.pth"
+        )
         logging.info(f"[+] Challenger promoted! {new_champion_pt}")
         shutil.copy(challenger_pt, new_champion_pt)
+        shutil.copy(current_challenger_pth, new_champion_pth)
     else:
         logging.info("[-] Challenger not promoted.")
 
@@ -279,12 +406,13 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
         value_loss=v_loss,
         win_rate=win_rate,
         promoted=promoted,
+        training_window=training_window,
     )
 
 
 def log_training_summary(history: List[IterationSummary]):
     """Logs a formatted table of training progress."""
-    header = f"{'iteration':<12} {'promoted':<10} {'win rate':<12} {'policy loss':<15} {'value loss':<12}"
+    header = f"{'iteration':<12} {'promoted':<10} {'win rate':<12} {'window':<9} {'policy loss':<15} {'value loss':<12}"
     logging.info("\n" + "=" * 70)
     logging.info(" TRAINING PROGRESS SUMMARY")
     logging.info("-" * 70)
@@ -296,13 +424,23 @@ def log_training_summary(history: List[IterationSummary]):
         wr = f"{entry.win_rate:.2%}" if it > 0 else "N/A"
         pi = f"{entry.policy_loss:.4f}"
         v = f"{entry.value_loss:.4f}"
-        logging.info(f"{it:<12} {p:<10} {wr:<12} {pi:<15} {v:<12}")
+        logging.info(
+            f"{it:<12} {p:<10} {wr:<12} {entry.training_window:<9} "
+            f"{pi:<15} {v:<12}"
+        )
 
     logging.info("=" * 70 + "\n")
 
 
 def main():
-    config = CurriculumConfig.load("curriculum_schedule.json")
+    parser = argparse.ArgumentParser(description="Run the Gomoku curriculum.")
+    parser.add_argument(
+        "--schedule",
+        default="curriculum_schedule.json",
+        help="Path to the curriculum JSON schedule (outputs remain relative to the current working directory).",
+    )
+    args = parser.parse_args()
+    config = CurriculumConfig.load(args.schedule)
 
     if not os.path.exists(config.weights_dir):
         os.makedirs(config.weights_dir)

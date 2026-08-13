@@ -31,7 +31,7 @@
 namespace {
 
 constexpr int kWorkerCount = 12;
-constexpr int kSimulationsPerMove = 1000;
+constexpr int kDefaultSimulationsPerMove = 1000;
 constexpr int kSearchBatchSize = 32;
 constexpr int kInferenceBatchRequests = 6;
 constexpr int kInferenceWaitMicroseconds = 500;
@@ -42,11 +42,13 @@ constexpr double kConfidenceZ90 = 1.6448536269514722;
 
 struct Arguments {
   int games = 0;
+  int simulations = kDefaultSimulationsPerMove;
   std::filesystem::path champion_model_path;
   std::filesystem::path challenger_model_path;
   std::filesystem::path out_dir;
   // Kept as a compatibility alias for the pre-Phase-7 curriculum script.
   std::filesystem::path out_file;
+  bool disable_endgame_solver = false;
 };
 
 struct MatchOutcome {
@@ -74,7 +76,8 @@ struct Summary {
 void PrintUsage(const char* program) {
   std::cerr << "Usage: " << program
             << " --games N --champion_model_path PATH"
-               " --challenger_model_path PATH --out_dir PATH\n";
+               " --challenger_model_path PATH --out_dir PATH"
+               " [--simulations N] [--disable_endgame_solver]\n";
 }
 
 int ParseInt(const std::string& text, const char* option) {
@@ -101,6 +104,10 @@ Arguments ParseArguments(int argc, char** argv) {
       PrintUsage(argv[0]);
       std::exit(0);
     }
+    if (option == "--disable_endgame_solver") {
+      arguments.disable_endgame_solver = true;
+      continue;
+    }
     if (i + 1 >= argc) {
       throw std::invalid_argument(option + " requires a value");
     }
@@ -108,6 +115,8 @@ Arguments ParseArguments(int argc, char** argv) {
     const std::string value = argv[++i];
     if (option == "--games") {
       arguments.games = ParseInt(value, "--games");
+    } else if (option == "--simulations") {
+      arguments.simulations = ParseInt(value, "--simulations");
     } else if (option == "--champion_model_path") {
       arguments.champion_model_path = value;
     } else if (option == "--challenger_model_path") {
@@ -280,10 +289,20 @@ int main(int argc, char** argv) {
     const std::uint64_t base_seed = MakeSeed();
     std::cout
         << "Evaluating " << arguments.games << " games with " << kWorkerCount
-        << " workers, " << kSimulationsPerMove
+        << " workers, " << arguments.simulations
         << " simulations/move; root noise enabled for the first 4 plies\n";
 
-    EndgameSolver solver = [](const Board& board) { return SolveVCF(board); };
+    EndgameSolver solver;
+    EndgameDefenseSolver defensive_solver;
+    if (!arguments.disable_endgame_solver) {
+      solver = [](const Board& board) { return SolveVCF(board); };
+      defensive_solver = [](const Board& board) {
+        return AnalyzeVCFDefense(board);
+      };
+    }
+    std::cout << (arguments.disable_endgame_solver
+                      ? "Endgame solver disabled\n"
+                      : "VCF attacker/defender enabled\n");
 
     std::vector<MatchOutcome> outcomes(arguments.games);
     std::atomic<int> next_game{0};
@@ -300,8 +319,8 @@ int main(int argc, char** argv) {
           if (game >= arguments.games) break;
 
           const bool champion_is_seat_a = (game % 2) == 0;
-          Config config;
-          config.simulations = kSimulationsPerMove;
+          SelfPlayConfig config;
+          config.simulations = arguments.simulations;
           config.batch_size = kSearchBatchSize;
           config.c_puct = kCPuct;
           config.seed = base_seed + static_cast<std::uint64_t>(game);
@@ -310,7 +329,6 @@ int main(int argc, char** argv) {
               kDirichletAlpha, kDirichletEpsilon, config.seed};
           config.dirichlet_noise_plies = 4;
           config.sample_actions = false;
-
           const EvaluatorSelector selector =
               [&](const Board& board) -> Evaluator* {
             const bool seat_a_to_move = board.current_player() == Seat::kA;
@@ -321,7 +339,8 @@ int main(int argc, char** argv) {
                        : static_cast<Evaluator*>(&challenger_evaluator);
           };
 
-          const GameResult result = PlayGame(config, selector, solver);
+          const GameResult result =
+              PlayGame(config, selector, solver, defensive_solver);
           const bool challenger_is_seat_a = !champion_is_seat_a;
           const bool winner_is_seat_a = result.result == Result::kPlayerAWin;
           const bool winner_is_seat_b = result.result == Result::kPlayerBWin;

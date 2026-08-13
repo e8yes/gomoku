@@ -2,3 +2,4 @@ torch
 torchsummary
 numpy
 tqdm
+matplotlib

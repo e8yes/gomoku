@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+#include <stdexcept>
 #include <utility>
 
 #include "evaluator.h"
@@ -36,7 +37,7 @@ class CountingEvaluator final : public Evaluator {
 }  // namespace
 
 TEST(SelfPlayTest, KeepsAndLabelsTheFinalThreePositions) {
-  Config config;
+  SelfPlayConfig config;
   config.simulations = 1;
   config.batch_size = 1;
   config.seed = 1234;
@@ -55,7 +56,7 @@ TEST(SelfPlayTest, KeepsAndLabelsTheFinalThreePositions) {
 }
 
 TEST(SelfPlayTest, AcceptsBorrowedEvaluatorAndOptionalRootNoise) {
-  Config config;
+  SelfPlayConfig config;
   config.simulations = 1;
   config.batch_size = 1;
   config.seed = 5678;
@@ -75,8 +76,25 @@ TEST(SelfPlayTest, AcceptsBorrowedEvaluatorAndOptionalRootNoise) {
   }
 }
 
+TEST(SelfPlayTest, ZeroWindowKeepsEveryNonTerminalPosition) {
+  SelfPlayConfig config;
+  config.simulations = 1;
+  config.batch_size = 1;
+  config.seed = 2468;
+  config.keep_last_moves = 0;
+
+  const std::vector<TrainingExample> examples = GenerateGame(config);
+
+  ASSERT_GT(examples.size(), 3u);
+  for (const auto& example : examples) {
+    EXPECT_FALSE(example.board.IsTerminal());
+    EXPECT_EQ(example.policy.size(),
+              static_cast<std::size_t>(Board::kNumActions));
+  }
+}
+
 TEST(SelfPlayTest, EvaluatorSelectorSupportsTwoModelMatches) {
-  Config config;
+  SelfPlayConfig config;
   config.simulations = 1;
   config.batch_size = 1;
   config.seed = 9012;
@@ -96,4 +114,80 @@ TEST(SelfPlayTest, EvaluatorSelectorSupportsTwoModelMatches) {
   EXPECT_GT(seat_a_evaluator.calls, 0);
   EXPECT_GT(seat_b_evaluator.calls, 0);
   EXPECT_NE(result.result, Result::kUndetermined);
+}
+
+TEST(SelfPlayTest, TwoModelGenerationCanKeepOnlyCurrentChampionPositions) {
+  SelfPlayConfig config;
+  config.simulations = 1;
+  config.batch_size = 1;
+  config.seed = 3456;
+  config.keep_last_moves = 0;
+  config.sample_actions = false;
+
+  CountingEvaluator current_champion;
+  CountingEvaluator previous_champion;
+  const Seat current_champion_seat = Seat::kB;
+  const EvaluatorSelector selector = [&](const Board& board) -> Evaluator* {
+    return board.current_player() == current_champion_seat ? &current_champion
+                                                           : &previous_champion;
+  };
+  const TrainingPositionFilter keep_current_champion = [&](const Board& board) {
+    return board.current_player() == current_champion_seat;
+  };
+
+  const std::vector<TrainingExample> examples =
+      GenerateGame(config, selector, keep_current_champion);
+
+  ASSERT_FALSE(examples.empty());
+  EXPECT_GT(current_champion.calls, 0);
+  EXPECT_GT(previous_champion.calls, 0);
+  for (const auto& example : examples) {
+    EXPECT_EQ(example.board.current_player(), current_champion_seat);
+  }
+}
+
+TEST(SelfPlayTest, ExplorationWindowsUseSixDecisionPliesWhenConfigured) {
+  SelfPlayConfig config;
+  config.sample_actions = true;
+  config.stochastic_action_plies = 6;
+
+  EXPECT_TRUE(ShouldSampleAction(config, 0));
+  EXPECT_TRUE(ShouldSampleAction(config, 5));
+  EXPECT_FALSE(ShouldSampleAction(config, 6));
+  EXPECT_FALSE(ShouldSampleAction(config, 100));
+}
+
+TEST(SelfPlayTest, NullableEndgameSolverCanBeDisabled) {
+  SelfPlayConfig config;
+  config.simulations = 1;
+  config.batch_size = 1;
+  config.seed = 1357;
+  config.keep_last_moves = 1;
+
+  CountingEvaluator evaluator;
+  EndgameSolver disabled_solver;
+  const std::vector<TrainingExample> examples =
+      GenerateGame(config, &evaluator, disabled_solver);
+
+  ASSERT_EQ(examples.size(), 1u);
+  EXPECT_GT(evaluator.calls, 0);
+  EXPECT_FALSE(static_cast<bool>(disabled_solver));
+}
+
+TEST(SelfPlayTest, ActionSamplingCanBeDisabledRegardlessOfWindow) {
+  SelfPlayConfig config;
+  config.sample_actions = false;
+  config.stochastic_action_plies = 6;
+
+  EXPECT_FALSE(ShouldSampleAction(config, 0));
+  EXPECT_FALSE(ShouldSampleAction(config, 6));
+}
+
+TEST(SelfPlayTest, RejectsNegativeStochasticActionWindow) {
+  SelfPlayConfig config;
+  config.simulations = 1;
+  config.batch_size = 1;
+  config.stochastic_action_plies = -1;
+
+  EXPECT_THROW(GenerateGame(config), std::invalid_argument);
 }

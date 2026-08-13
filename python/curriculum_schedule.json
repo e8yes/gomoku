@@ -5,14 +5,18 @@
   "game_generator_bin": "./gomoku_game_generator",
   "model_evaluator_bin": "./gomoku_model_evaluator",
   "start_iteration": 0,
-  "num_iterations": 50,
-  "games_per_iteration": 9000,
-  "games_per_evaluation": 100,
+  "num_iterations": 30,
+  "games_per_iteration": 10000,
+  "previous_champion_mix_fraction": 0.3,
+  "simulations_per_move": 800,
+  "games_per_evaluation": 200,
+  "endgame_solver_start_iteration": 10,
+  "base_training_window_iterations": 4,
   "min_promotion_win_rate": 0.55,
   "train_params": {
     "batch_size": 512,
     "epochs": 1,
     "lr_seed": 0.01,
-    "lr_decay": 0.9
+    "lr_decay": 0.93
   }
 }
