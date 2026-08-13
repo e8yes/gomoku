@@ -11,6 +11,8 @@
 
 #include <torch/cuda.h>
 
+#include <glog/logging.h>
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -444,8 +446,8 @@ class MatchGame {
     }
     synced_actions_.clear();
     mcts_->Reset();
-    std::cout << "game_started id=" << game_id_ << " seat=" << seat_
-              << " opponent=" << (seat_ == "A" ? player_b : player_a) << "\n";
+    LOG(INFO) << "game_started id=" << game_id_ << " seat=" << seat_
+              << " opponent=" << (seat_ == "A" ? player_b : player_a);
   }
 
   bool IsFor(const JsonValue::Object& params) const {
@@ -507,9 +509,9 @@ class MatchGame {
       mcts_->SetDirichletNoise(std::nullopt);
     }
 
-    std::cout << "move game=" << game_id_ << " ply=" << actions.size()
+    LOG(INFO) << "move game=" << game_id_ << " ply=" << actions.size()
               << " action=" << action << " label=" << Action(action).ToString()
-              << " deadline_ms=" << deadline_ms << "\n";
+              << " deadline_ms=" << deadline_ms;
     rpc->Call("submit_move",
               Params({{"game_id", JsonValue(game_id_)},
                       {"action", JsonValue(action)}}),
@@ -565,11 +567,11 @@ int RunMatchClient(const MatchClientOptions& options) {
         std::chrono::microseconds(500));
     neural_evaluator = std::make_unique<NeuralNetEvaluator>(inference_executor);
     evaluator = neural_evaluator.get();
-    std::cout << "using model " << options.model_path << "\n";
+    LOG(INFO) << "using model " << options.model_path.string();
   } else {
     random_evaluator = std::make_unique<RandomEvaluator>();
     evaluator = random_evaluator.get();
-    std::cout << "using RandomEvaluator (protocol smoke-test mode)\n";
+    LOG(INFO) << "using RandomEvaluator (protocol smoke-test mode)";
   }
 
   RpcClient rpc(options.host, options.port);
@@ -588,7 +590,7 @@ int RunMatchClient(const MatchClientOptions& options) {
     throw std::runtime_error("server did not negotiate JSON-RPC protocol 2.0");
   }
   rpc.Call("register", Params({{"name", JsonValue(options.name)}}));
-  std::cout << "registered name=" << options.name << "\n";
+  LOG(INFO) << "registered name=" << options.name;
 
   if (!options.opponent.empty()) {
     const auto deadline = std::chrono::steady_clock::now() +
@@ -617,7 +619,7 @@ int RunMatchClient(const MatchClientOptions& options) {
         std::this_thread::sleep_for(std::chrono::milliseconds(250));
       }
     }
-    std::cout << "created match id=" << game_id << "\n";
+    LOG(INFO) << "created match id=" << game_id;
   }
 
   EndgameSolver solver;
@@ -651,8 +653,8 @@ int RunMatchClient(const MatchClientOptions& options) {
     } else if (method == "game_finished") {
       const std::string result = RequiredString(params, "result");
       const std::string reason = RequiredString(params, "reason");
-      std::cout << "game_finished id=" << RequiredString(params, "game_id")
-                << " result=" << result << " reason=" << reason << "\n";
+      LOG(INFO) << "game_finished id=" << RequiredString(params, "game_id")
+                << " result=" << result << " reason=" << reason;
       return 0;
     }
   }

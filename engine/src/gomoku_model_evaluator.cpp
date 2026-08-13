@@ -1,3 +1,5 @@
+#include <gflags/gflags.h>
+#include <glog/logging.h>
 #include <torch/cuda.h>
 
 #include <algorithm>
@@ -28,10 +30,19 @@
 #include "self_play.h"
 #include "vcf_solver.h"
 
+DEFINE_int32(games, 0, "Number of evaluation matches (required, > 0)");
+DEFINE_int32(simulations, 1000, "MCTS simulations per move (> 0)");
+DEFINE_string(champion_model_path, "",
+              "Path to champion model package (.pt2) (required)");
+DEFINE_string(challenger_model_path, "",
+              "Path to challenger model package (.pt2) (required)");
+DEFINE_string(out_dir, "", "Output directory path for evaluation.json");
+DEFINE_string(out_file, "", "Direct output JSON file path");
+DEFINE_bool(disable_endgame_solver, false, "Disable VCF endgame solver");
+
 namespace {
 
 constexpr int kWorkerCount = 12;
-constexpr int kDefaultSimulationsPerMove = 1000;
 constexpr int kSearchBatchSize = 32;
 constexpr int kInferenceBatchRequests = 6;
 constexpr int kInferenceWaitMicroseconds = 500;
@@ -39,17 +50,6 @@ constexpr float kCPuct = 1.0f;
 constexpr float kDirichletAlpha = 0.3f;
 constexpr float kDirichletEpsilon = 0.25f;
 constexpr double kConfidenceZ90 = 1.6448536269514722;
-
-struct Arguments {
-  int games = 0;
-  int simulations = kDefaultSimulationsPerMove;
-  std::filesystem::path champion_model_path;
-  std::filesystem::path challenger_model_path;
-  std::filesystem::path out_dir;
-  // Kept as a compatibility alias for the pre-Phase-7 curriculum script.
-  std::filesystem::path out_file;
-  bool disable_endgame_solver = false;
-};
 
 struct MatchOutcome {
   bool challenger_won = false;
@@ -73,79 +73,25 @@ struct Summary {
   int max_length = 0;
 };
 
-void PrintUsage(const char* program) {
-  std::cerr << "Usage: " << program
-            << " --games N --champion_model_path PATH"
-               " --challenger_model_path PATH --out_dir PATH"
-               " [--simulations N] [--disable_endgame_solver]\n";
-}
-
-int ParseInt(const std::string& text, const char* option) {
-  std::size_t consumed = 0;
-  long long value = 0;
-  try {
-    value = std::stoll(text, &consumed);
-  } catch (const std::exception&) {
-    throw std::invalid_argument(std::string(option) + " requires an integer");
+void ValidateFlags() {
+  if (FLAGS_games <= 0) {
+    LOG(FATAL) << "--games is required and must be positive";
   }
-  if (consumed != text.size() || value <= 0 ||
-      value > std::numeric_limits<int>::max()) {
-    throw std::invalid_argument(std::string(option) +
-                                " requires a positive integer");
+  if (FLAGS_simulations <= 0) {
+    LOG(FATAL) << "--simulations must be greater than zero";
   }
-  return static_cast<int>(value);
-}
-
-Arguments ParseArguments(int argc, char** argv) {
-  Arguments arguments;
-  for (int i = 1; i < argc; ++i) {
-    const std::string option = argv[i];
-    if (option == "--help" || option == "-h") {
-      PrintUsage(argv[0]);
-      std::exit(0);
-    }
-    if (option == "--disable_endgame_solver") {
-      arguments.disable_endgame_solver = true;
-      continue;
-    }
-    if (i + 1 >= argc) {
-      throw std::invalid_argument(option + " requires a value");
-    }
-
-    const std::string value = argv[++i];
-    if (option == "--games") {
-      arguments.games = ParseInt(value, "--games");
-    } else if (option == "--simulations") {
-      arguments.simulations = ParseInt(value, "--simulations");
-    } else if (option == "--champion_model_path") {
-      arguments.champion_model_path = value;
-    } else if (option == "--challenger_model_path") {
-      arguments.challenger_model_path = value;
-    } else if (option == "--out_dir") {
-      arguments.out_dir = value;
-    } else if (option == "--out_file") {
-      arguments.out_file = value;
-    } else {
-      throw std::invalid_argument("Unknown option: " + option);
-    }
+  if (FLAGS_champion_model_path.empty()) {
+    LOG(FATAL) << "--champion_model_path is required";
   }
-
-  if (arguments.games <= 0) {
-    throw std::invalid_argument("--games is required and must be positive");
+  if (FLAGS_challenger_model_path.empty()) {
+    LOG(FATAL) << "--challenger_model_path is required";
   }
-  if (arguments.champion_model_path.empty()) {
-    throw std::invalid_argument("--champion_model_path is required");
+  if (!FLAGS_out_dir.empty() && !FLAGS_out_file.empty()) {
+    LOG(FATAL) << "Specify only one of --out_dir or --out_file";
   }
-  if (arguments.challenger_model_path.empty()) {
-    throw std::invalid_argument("--challenger_model_path is required");
+  if (FLAGS_out_dir.empty() && FLAGS_out_file.empty()) {
+    LOG(FATAL) << "--out_dir is required";
   }
-  if (!arguments.out_dir.empty() && !arguments.out_file.empty()) {
-    throw std::invalid_argument("Specify only one of --out_dir or --out_file");
-  }
-  if (arguments.out_dir.empty() && arguments.out_file.empty()) {
-    throw std::invalid_argument("--out_dir is required");
-  }
-  return arguments;
 }
 
 std::uint64_t MakeSeed() {
@@ -154,9 +100,9 @@ std::uint64_t MakeSeed() {
          static_cast<std::uint64_t>(random_device());
 }
 
-std::filesystem::path ResolveOutputFile(const Arguments& arguments) {
-  if (!arguments.out_file.empty()) return arguments.out_file;
-  return arguments.out_dir / "evaluation.json";
+std::filesystem::path ResolveOutputFile() {
+  if (!FLAGS_out_file.empty()) return FLAGS_out_file;
+  return std::filesystem::path(FLAGS_out_dir) / "evaluation.json";
 }
 
 std::pair<double, double> WilsonInterval90(int wins, int games) {
@@ -221,8 +167,7 @@ void WriteSummary(const std::filesystem::path& output_file,
 
   std::ofstream output(output_file, std::ios::trunc);
   if (!output) {
-    throw std::runtime_error("Unable to open evaluation output: " +
-                             output_file.string());
+    LOG(FATAL) << "Unable to open evaluation output: " << output_file.string();
   }
 
   output << std::setprecision(10);
@@ -246,65 +191,71 @@ void WriteSummary(const std::filesystem::path& output_file,
          << "  }\n"
          << "}\n";
   if (!output) {
-    throw std::runtime_error("Failed while writing evaluation output: " +
-                             output_file.string());
+    LOG(FATAL) << "Failed while writing evaluation output: "
+               << output_file.string();
   }
 }
 
 }  // namespace
 
 int main(int argc, char** argv) {
+  gflags::SetUsageMessage(
+      "Gomoku champion vs challenger evaluator.\n"
+      "Usage: gomoku_model_evaluator --games N --champion_model_path PATH "
+      "--challenger_model_path PATH --out_dir PATH [--simulations N] "
+      "[--disable_endgame_solver]");
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  google::InitGoogleLogging(argv[0]);
+  FLAGS_logtostderr = 1;
+
   try {
-    const Arguments arguments = ParseArguments(argc, argv);
-    if (!std::filesystem::exists(arguments.champion_model_path)) {
-      throw std::invalid_argument("Champion model does not exist: " +
-                                  arguments.champion_model_path.string());
+    ValidateFlags();
+    const std::filesystem::path champion_path(FLAGS_champion_model_path);
+    const std::filesystem::path challenger_path(FLAGS_challenger_model_path);
+
+    if (!std::filesystem::exists(champion_path)) {
+      LOG(FATAL) << "Champion model does not exist: " << champion_path.string();
     }
-    if (!std::filesystem::exists(arguments.challenger_model_path)) {
-      throw std::invalid_argument("Challenger model does not exist: " +
-                                  arguments.challenger_model_path.string());
+    if (!std::filesystem::exists(challenger_path)) {
+      LOG(FATAL) << "Challenger model does not exist: "
+                 << challenger_path.string();
     }
     if (!torch::cuda::is_available()) {
-      throw std::runtime_error("CUDA is required for model evaluation");
+      LOG(FATAL) << "CUDA is required for model evaluation";
     }
 
-    const std::filesystem::path output_file = ResolveOutputFile(arguments);
-    if (!arguments.out_dir.empty()) {
-      std::filesystem::create_directories(arguments.out_dir);
+    const std::filesystem::path output_file = ResolveOutputFile();
+    if (!FLAGS_out_dir.empty()) {
+      std::filesystem::create_directories(FLAGS_out_dir);
     }
 
-    // Each model gets one shared inference executor. Six queued 32-item
-    // MCTS requests form a maximum 192-board GPU batch for each model.
     auto champion_executor = std::make_shared<BatchInferenceExecutor>(
-        arguments.champion_model_path, torch::Device(torch::kCUDA),
-        kInferenceBatchRequests,
+        champion_path, torch::Device(torch::kCUDA), kInferenceBatchRequests,
         std::chrono::microseconds(kInferenceWaitMicroseconds));
     auto challenger_executor = std::make_shared<BatchInferenceExecutor>(
-        arguments.challenger_model_path, torch::Device(torch::kCUDA),
-        kInferenceBatchRequests,
+        challenger_path, torch::Device(torch::kCUDA), kInferenceBatchRequests,
         std::chrono::microseconds(kInferenceWaitMicroseconds));
     NeuralNetEvaluator champion_evaluator(champion_executor);
     NeuralNetEvaluator challenger_evaluator(challenger_executor);
 
     const std::uint64_t base_seed = MakeSeed();
-    std::cout
-        << "Evaluating " << arguments.games << " games with " << kWorkerCount
-        << " workers, " << arguments.simulations
-        << " simulations/move; root noise enabled for the first 4 plies\n";
+    LOG(INFO) << "Evaluating " << FLAGS_games << " games with "
+              << kWorkerCount << " workers, " << FLAGS_simulations
+              << " simulations/move; root noise enabled for the first 4 plies";
 
     EndgameSolver solver;
     EndgameDefenseSolver defensive_solver;
-    if (!arguments.disable_endgame_solver) {
+    if (!FLAGS_disable_endgame_solver) {
       solver = [](const Board& board) { return SolveVCF(board); };
       defensive_solver = [](const Board& board) {
         return AnalyzeVCFDefense(board);
       };
     }
-    std::cout << (arguments.disable_endgame_solver
-                      ? "Endgame solver disabled\n"
-                      : "VCF attacker/defender enabled\n");
+    LOG(INFO) << (FLAGS_disable_endgame_solver
+                      ? "Endgame solver disabled"
+                      : "VCF attacker/defender enabled");
 
-    std::vector<MatchOutcome> outcomes(arguments.games);
+    std::vector<MatchOutcome> outcomes(FLAGS_games);
     std::atomic<int> next_game{0};
     std::atomic<int> completed_games{0};
     std::atomic<bool> stop{false};
@@ -316,11 +267,11 @@ int main(int argc, char** argv) {
       try {
         while (!stop.load(std::memory_order_relaxed)) {
           const int game = next_game.fetch_add(1, std::memory_order_relaxed);
-          if (game >= arguments.games) break;
+          if (game >= FLAGS_games) break;
 
           const bool champion_is_seat_a = (game % 2) == 0;
           SelfPlayConfig config;
-          config.simulations = arguments.simulations;
+          config.simulations = FLAGS_simulations;
           config.batch_size = kSearchBatchSize;
           config.c_puct = kCPuct;
           config.seed = base_seed + static_cast<std::uint64_t>(game);
@@ -357,10 +308,10 @@ int main(int argc, char** argv) {
 
           const int completed =
               completed_games.fetch_add(1, std::memory_order_relaxed) + 1;
-          if (completed % 10 == 0 || completed == arguments.games) {
+          if (completed % 10 == 0 || completed == FLAGS_games) {
             std::lock_guard<std::mutex> lock(progress_mutex);
-            std::cout << "Evaluated " << completed << "/" << arguments.games
-                      << " games\n";
+            LOG(INFO) << "Evaluated " << completed << "/" << FLAGS_games
+                      << " games";
           }
         }
       } catch (...) {
@@ -372,7 +323,7 @@ int main(int argc, char** argv) {
       }
     };
 
-    const int worker_count = std::min(kWorkerCount, arguments.games);
+    const int worker_count = std::min(kWorkerCount, FLAGS_games);
     std::vector<std::thread> workers;
     workers.reserve(worker_count);
     for (int i = 0; i < worker_count; ++i) workers.emplace_back(worker);
@@ -381,19 +332,20 @@ int main(int argc, char** argv) {
 
     const Summary summary = CalculateSummary(outcomes);
     WriteSummary(output_file, summary);
-    std::cout << std::fixed << std::setprecision(2) << "Challenger win rate: "
-              << (summary.challenger_win_rate * 100.0) << "% (90% CI "
-              << (summary.confidence_low * 100.0) << "%-"
-              << (summary.confidence_high * 100.0) << "%)\n"
-              << "Game length: mean " << summary.mean_length << ", median "
-              << summary.median_length << ", std " << summary.std_length
-              << ", min " << summary.min_length << ", max "
-              << summary.max_length << "\n"
-              << "Wrote evaluation results: " << output_file << "\n";
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(2) << "Challenger win rate: "
+       << (summary.challenger_win_rate * 100.0) << "% (90% CI "
+       << (summary.confidence_low * 100.0) << "%-"
+       << (summary.confidence_high * 100.0) << "%)\n"
+       << "Game length: mean " << summary.mean_length << ", median "
+       << summary.median_length << ", std " << summary.std_length
+       << ", min " << summary.min_length << ", max "
+       << summary.max_length << "\n"
+       << "Wrote evaluation results: \"" << output_file.string() << "\"";
+    LOG(INFO) << ss.str();
     return 0;
   } catch (const std::exception& error) {
-    std::cerr << "gomoku_model_evaluator: " << error.what() << "\n";
-    PrintUsage(argv[0]);
+    LOG(ERROR) << "gomoku_model_evaluator: " << error.what();
     return 2;
   }
 }

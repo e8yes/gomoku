@@ -1,3 +1,5 @@
+#include <gflags/gflags.h>
+#include <glog/logging.h>
 #include <torch/cuda.h>
 
 #include <algorithm>
@@ -17,15 +19,12 @@
 #include "mcts.h"
 #include "neural_net_evaluator.h"
 
+DEFINE_string(model, "", "Path to model package (.pt2) (required)");
+DEFINE_int32(simulations, 800, "MCTS simulations per move (> 0)");
+
 namespace {
 
-constexpr int kDefaultSimulations = 800;
 constexpr int kInferenceWaitMicroseconds = 500;
-
-struct Arguments {
-  std::filesystem::path model_path;
-  int simulations = kDefaultSimulations;
-};
 
 struct SearchSetting {
   const char* name;
@@ -34,44 +33,13 @@ struct SearchSetting {
   int virtual_loss;
 };
 
-void PrintUsage(const char* program) {
-  std::cerr << "Usage: " << program << " --model PATH [--simulations N]\n";
-}
-
-int ParsePositiveInt(const std::string& text, const char* option) {
-  std::size_t consumed = 0;
-  const long value = std::stol(text, &consumed);
-  if (consumed != text.size() || value <= 0 || value > INT_MAX) {
-    throw std::invalid_argument(std::string(option) +
-                                " requires a positive integer");
+void ValidateFlags() {
+  if (FLAGS_model.empty()) {
+    LOG(FATAL) << "--model is required";
   }
-  return static_cast<int>(value);
-}
-
-Arguments ParseArguments(int argc, char** argv) {
-  Arguments arguments;
-  for (int i = 1; i < argc; ++i) {
-    const std::string option = argv[i];
-    if (option == "--help" || option == "-h") {
-      PrintUsage(argv[0]);
-      std::exit(0);
-    }
-    if (i + 1 >= argc) {
-      throw std::invalid_argument(option + " requires a value");
-    }
-    const std::string value = argv[++i];
-    if (option == "--model") {
-      arguments.model_path = value;
-    } else if (option == "--simulations") {
-      arguments.simulations = ParsePositiveInt(value, "--simulations");
-    } else {
-      throw std::invalid_argument("Unknown option: " + option);
-    }
+  if (FLAGS_simulations <= 0) {
+    LOG(FATAL) << "--simulations must be greater than zero";
   }
-  if (arguments.model_path.empty()) {
-    throw std::invalid_argument("--model is required");
-  }
-  return arguments;
 }
 
 Board MakeQuietMidgame() {
@@ -81,7 +49,6 @@ Board MakeQuietMidgame() {
   board.Apply(Action::FromXY(8, 7).id);
   board.Apply(Action::kSwap2ChooseBlack);
 
-  // A non-forcing central position after the direct Swap2 colour choice.
   for (const Action action :
        {Action::FromXY(6, 8), Action::FromXY(8, 8), Action::FromXY(6, 7),
         Action::FromXY(9, 8), Action::FromXY(7, 6), Action::FromXY(8, 9),
@@ -151,34 +118,38 @@ void RunScenario(const char* scenario_name, const Board& board,
 }  // namespace
 
 int main(int argc, char** argv) {
+  gflags::SetUsageMessage(
+      "Gomoku MCTS ablation diagnostics.\n"
+      "Usage: gomoku_mcts_ablation --model PATH [--simulations N]");
+  gflags::ParseCommandLineFlags(&argc, &argv, true);
+  google::InitGoogleLogging(argv[0]);
+  FLAGS_logtostderr = 1;
+
   try {
-    const Arguments arguments = ParseArguments(argc, argv);
-    if (!std::filesystem::exists(arguments.model_path)) {
-      throw std::invalid_argument("Model does not exist: " +
-                                  arguments.model_path.string());
+    ValidateFlags();
+    const std::filesystem::path model_path(FLAGS_model);
+    if (!std::filesystem::exists(model_path)) {
+      LOG(FATAL) << "Model does not exist: " << model_path.string();
     }
     if (!torch::cuda::is_available()) {
-      throw std::runtime_error("CUDA is required for this ablation");
+      LOG(FATAL) << "CUDA is required for this ablation";
     }
 
-    // One request at a time makes each MCTS setting's batch size the only
-    // batching variable; no cross-search queue coalescing can affect it.
     auto executor = std::make_shared<BatchInferenceExecutor>(
-        arguments.model_path, torch::Device(torch::kCUDA), 1,
+        model_path, torch::Device(torch::kCUDA), 1,
         std::chrono::microseconds(kInferenceWaitMicroseconds));
     NeuralNetEvaluator evaluator(executor);
 
-    std::cout << "MCTS ablation using " << arguments.model_path << " with "
-              << arguments.simulations
-              << " simulations, no Dirichlet noise or endgame solver.\n";
+    LOG(INFO) << "MCTS ablation using " << model_path.string() << " with "
+              << FLAGS_simulations
+              << " simulations, no Dirichlet noise or endgame solver.";
     RunScenario("quiet midgame", MakeQuietMidgame(), &evaluator,
-                arguments.simulations);
+                FLAGS_simulations);
     RunScenario("white open-three defense", MakeWhiteOpenThree(), &evaluator,
-                arguments.simulations);
+                FLAGS_simulations);
     return 0;
   } catch (const std::exception& error) {
-    std::cerr << "gomoku_mcts_ablation: " << error.what() << "\n";
-    PrintUsage(argv[0]);
+    LOG(ERROR) << "gomoku_mcts_ablation: " << error.what();
     return 2;
   }
 }
