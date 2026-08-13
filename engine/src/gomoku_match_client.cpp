@@ -12,7 +12,7 @@ DEFINE_string(name, "", "Player name for protocol registration (required)");
 DEFINE_string(host, "127.0.0.1", "Match server host IP or hostname");
 DEFINE_int32(port, 7901, "Match server TCP port");
 DEFINE_string(opponent, "", "Opponent player name to pair against");
-DEFINE_string(seat, "", "Requested seat (A or B)");
+DEFINE_string(seat, "A", "Requested seat (A or B)");
 DEFINE_string(auth_token, "", "Authentication token");
 DEFINE_string(admin_token, "", "Admin token for match pairing");
 DEFINE_string(model, "",

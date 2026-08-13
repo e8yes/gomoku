@@ -9,9 +9,8 @@
 #endif
 #endif
 
-#include <torch/cuda.h>
-
 #include <glog/logging.h>
+#include <torch/cuda.h>
 
 #include <algorithm>
 #include <atomic>
@@ -27,7 +26,6 @@
 #include <memory>
 #include <mutex>
 #include <random>
-#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -47,8 +45,9 @@
 #include <cerrno>
 #endif
 
+#include <nlohmann/json.hpp>
+
 #include "batch_inference_executor.h"
-#include "match_json.h"
 #include "mcts.h"
 #include "neural_net_evaluator.h"
 #include "random_evaluator.h"
@@ -56,6 +55,8 @@
 #include "vcf_solver.h"
 
 namespace {
+
+using JsonValue = nlohmann::json;
 
 #ifdef _WIN32
 using SocketHandle = SOCKET;
@@ -224,16 +225,16 @@ class RpcClient {
   RpcClient& operator=(const RpcClient&) = delete;
 
   JsonValue Call(
-      const std::string& method, JsonValue::Object params,
+      const std::string& method, JsonValue params,
       std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
     const std::string id = "cpp-" + std::to_string(next_id_++);
-    JsonValue::Object request;
-    request.emplace("jsonrpc", JsonValue("2.0"));
-    request.emplace("id", JsonValue(id));
-    request.emplace("method", JsonValue(method));
-    request.emplace("params", JsonValue(std::move(params)));
+    JsonValue request = JsonValue::object();
+    request["jsonrpc"] = "2.0";
+    request["id"] = id;
+    request["method"] = method;
+    request["params"] = std::move(params);
     try {
-      connection_.SendLine(SerializeJson(JsonValue(std::move(request))));
+      connection_.SendLine(request.dump());
     } catch (const std::exception& error) {
       Close();
       throw RpcError(error.what());
@@ -244,29 +245,33 @@ class RpcClient {
       return responses_.find(id) != responses_.end() || closed_;
     });
     if (!received || responses_.find(id) == responses_.end()) {
+      if (!reader_error_.empty()) {
+        throw RpcError(method + " failed: " + reader_error_);
+      }
       throw RpcError(method + " timed out or transport closed");
     }
     JsonValue response = std::move(responses_.at(id));
     responses_.erase(id);
     lock.unlock();
 
-    if (const JsonValue* error = response.Find("error"); error != nullptr) {
+    if (response.contains("error") && !response["error"].is_null()) {
+      const auto& error = response["error"];
       std::string code_name;
-      if (const JsonValue* data = error->Find("data");
-          data != nullptr && data->IsObject()) {
-        if (const JsonValue* name = data->Find("code_name");
-            name != nullptr && name->IsString()) {
-          code_name = name->AsString();
+      if (error.contains("data") && error["data"].is_object()) {
+        if (error["data"].contains("code_name") &&
+            error["data"]["code_name"].is_string()) {
+          code_name = error["data"]["code_name"].get<std::string>();
         }
       }
-      const std::string message = error->Find("message") != nullptr
-                                      ? error->At("message").AsString()
-                                      : "server returned an error";
+      const std::string message =
+          error.contains("message") && error["message"].is_string()
+              ? error["message"].get<std::string>()
+              : "server returned an error";
       throw RpcError(method + " returned " +
                      (code_name.empty() ? "error" : code_name) + ": " +
                      message);
     }
-    return response.At("result");
+    return response.at("result");
   }
 
   bool WaitForEvent(JsonValue* event, std::chrono::milliseconds timeout =
@@ -305,15 +310,14 @@ class RpcClient {
         std::string line;
         if (!connection_.ReadLine(&line)) break;
         if (line.empty()) continue;
-        JsonValue message = ParseJson(line);
+        JsonValue message = JsonValue::parse(line);
         std::lock_guard<std::mutex> lock(mutex_);
-        const JsonValue* id = message.Find("id");
-        if (id != nullptr && id->IsString() &&
-            (message.Find("result") != nullptr ||
-             message.Find("error") != nullptr)) {
-          responses_[id->AsString()] = std::move(message);
+        if (message.contains("id") && message["id"].is_string() &&
+            (message.contains("result") || message.contains("error"))) {
+          const std::string response_id = message["id"].get<std::string>();
+          responses_[response_id] = std::move(message);
           response_condition_.notify_all();
-        } else if (message.Find("method") != nullptr) {
+        } else if (message.contains("method")) {
           events_.push_back(std::move(message));
           event_condition_.notify_all();
         }
@@ -343,40 +347,41 @@ class RpcClient {
   std::atomic<bool> close_started_{false};
 };
 
-JsonValue::Object Params(
+JsonValue Params(
     std::initializer_list<std::pair<const std::string, JsonValue>> values) {
-  return JsonValue::Object(values);
+  JsonValue object = JsonValue::object();
+  for (const auto& [key, val] : values) {
+    object[key] = val;
+  }
+  return object;
 }
 
-std::string RequiredString(const JsonValue::Object& object,
-                           const std::string& key) {
-  const auto it = object.find(key);
-  if (it == object.end() || !it->second.IsString()) {
+std::string RequiredString(const JsonValue& object, const std::string& key) {
+  if (!object.contains(key) || !object[key].is_string()) {
     throw std::runtime_error("match event is missing string field '" + key +
                              "'");
   }
-  return it->second.AsString();
+  return object[key].get<std::string>();
 }
 
-std::int64_t RequiredInt(const JsonValue::Object& object,
-                         const std::string& key) {
-  const auto it = object.find(key);
-  if (it == object.end()) {
+std::int64_t RequiredInt(const JsonValue& object, const std::string& key) {
+  if (!object.contains(key) || !object[key].is_number_integer()) {
     throw std::runtime_error("match state is missing integer field '" + key +
                              "'");
   }
-  return it->second.AsInt();
+  return object[key].get<std::int64_t>();
 }
 
-std::vector<int> ReadActions(const JsonValue::Object& state) {
-  const auto it = state.find("moves");
-  if (it == state.end() || !it->second.IsArray()) {
+std::vector<int> ReadActions(const JsonValue& state) {
+  if (!state.contains("moves") || !state["moves"].is_array()) {
     throw std::runtime_error("match state is missing the moves array");
   }
   std::vector<int> moves;
-  moves.reserve(it->second.AsArray().size());
-  for (const JsonValue& value : it->second.AsArray()) {
-    const std::int64_t action = value.AsInt();
+  for (const JsonValue& value : state["moves"]) {
+    if (!value.is_number_integer()) {
+      throw std::runtime_error("match state contains an invalid move format");
+    }
+    const std::int64_t action = value.get<std::int64_t>();
     if (action < 0 || action >= Board::kNumActions) {
       throw std::runtime_error("match state contains an invalid action id");
     }
@@ -428,13 +433,12 @@ class MatchGame {
                                    self_play_config_.dirichlet_noise);
   }
 
-  void Start(const JsonValue::Object& params) {
+  void Start(const JsonValue& params) {
     game_id_ = RequiredString(params, "game_id");
-    const auto players_it = params.find("players");
-    if (players_it == params.end() || !players_it->second.IsObject()) {
+    if (!params.contains("players") || !params["players"].is_object()) {
       throw std::runtime_error("game_started is missing players");
     }
-    const auto& players = players_it->second.AsObject();
+    const auto& players = params["players"];
     const std::string player_a = RequiredString(players, "A");
     const std::string player_b = RequiredString(players, "B");
     if (player_a == options_.name) {
@@ -450,20 +454,18 @@ class MatchGame {
               << " opponent=" << (seat_ == "A" ? player_b : player_a);
   }
 
-  bool IsFor(const JsonValue::Object& params) const {
-    const auto it = params.find("game_id");
-    return it != params.end() && it->second.IsString() &&
-           it->second.AsString() == game_id_;
+  bool IsFor(const JsonValue& params) const {
+    return params.contains("game_id") && params["game_id"].is_string() &&
+           params["game_id"].get<std::string>() == game_id_;
   }
 
-  int HandleTurn(RpcClient* rpc, const JsonValue::Object& params,
-                 EndgameSolver solver, EndgameDefenseSolver defensive_solver) {
+  int HandleTurn(RpcClient* rpc, const JsonValue& params, EndgameSolver solver,
+                 EndgameDefenseSolver defensive_solver) {
     if (!IsFor(params)) return 0;
-    const auto state_it = params.find("state");
-    if (state_it == params.end() || !state_it->second.IsObject()) {
+    if (!params.contains("state") || !params["state"].is_object()) {
       throw std::runtime_error("your_turn is missing state");
     }
-    const auto& state = state_it->second.AsObject();
+    const auto& state = params["state"];
     const std::vector<int> actions = ReadActions(state);
     Board board = ReconstructBoard(actions);
     if (RequiredString(state, "current_player") != seat_) {
@@ -480,10 +482,10 @@ class MatchGame {
       mcts_->SelectAction(actions[i]);
     }
 
-    const auto deadline_it = params.find("deadline_ms");
-    const int deadline_ms = deadline_it == params.end()
-                                ? 5000
-                                : static_cast<int>(deadline_it->second.AsInt());
+    const int deadline_ms = params.contains("deadline_ms") &&
+                                    params["deadline_ms"].is_number_integer()
+                                ? params["deadline_ms"].get<int>()
+                                : 5000;
 
     // Stop search before the referee deadline so the final move submission
     // has a predictable transport margin. MCTS checks this deadline between
@@ -513,8 +515,7 @@ class MatchGame {
               << " action=" << action << " label=" << Action(action).ToString()
               << " deadline_ms=" << deadline_ms;
     rpc->Call("submit_move",
-              Params({{"game_id", JsonValue(game_id_)},
-                      {"action", JsonValue(action)}}),
+              Params({{"game_id", game_id_}, {"action", action}}),
               std::chrono::milliseconds(std::max(1000, deadline_ms)));
     return 1;
   }
@@ -575,21 +576,21 @@ int RunMatchClient(const MatchClientOptions& options) {
   }
 
   RpcClient rpc(options.host, options.port);
-  JsonValue::Object handshake = Params({
-      {"protocol_version", JsonValue("2.0")},
-      {"client_name", JsonValue(options.name)},
+  JsonValue handshake = Params({
+      {"protocol_version", "2.0"},
+      {"client_name", options.name},
   });
   if (!options.auth_token.empty()) {
-    handshake.emplace("auth_token", JsonValue(options.auth_token));
+    handshake["auth_token"] = options.auth_token;
   }
   if (!options.admin_token.empty()) {
-    handshake.emplace("admin_token", JsonValue(options.admin_token));
+    handshake["admin_token"] = options.admin_token;
   }
   const JsonValue hello = rpc.Call("handshake", std::move(handshake));
-  if (hello.At("protocol_version").AsString() != "2.0") {
+  if (hello.at("protocol_version").get<std::string>() != "2.0") {
     throw std::runtime_error("server did not negotiate JSON-RPC protocol 2.0");
   }
-  rpc.Call("register", Params({{"name", JsonValue(options.name)}}));
+  rpc.Call("register", Params({{"name", options.name}}));
   LOG(INFO) << "registered name=" << options.name;
 
   if (!options.opponent.empty()) {
@@ -599,19 +600,18 @@ int RunMatchClient(const MatchClientOptions& options) {
     while (game_id.empty()) {
       try {
         game_id =
-            rpc.Call("create_match",
-                     Params({{"player_a", JsonValue(options.seat == "A"
-                                                        ? options.name
-                                                        : options.opponent)},
-                             {"player_b",
-                              JsonValue(options.seat == "A" ? options.opponent
-                                                            : options.name)},
-                             {"board_size", JsonValue(Board::kSize)},
-                             {"deadline_ms_per_move",
-                              JsonValue(options.deadline_ms_per_move)}}),
-                     std::chrono::milliseconds(5000))
-                .At("game_id")
-                .AsString();
+            rpc.Call(
+                   "create_match",
+                   Params({{"player_a", options.seat == "A" ? options.name
+                                                            : options.opponent},
+                           {"player_b", options.seat == "A" ? options.opponent
+                                                            : options.name},
+                           {"board_size", Board::kSize},
+                           {"deadline_ms_per_move",
+                            options.deadline_ms_per_move}}),
+                   std::chrono::milliseconds(5000))
+                .at("game_id")
+                .get<std::string>();
       } catch (const RpcError& error) {
         if (std::chrono::steady_clock::now() >= deadline) throw;
         const std::string message = error.what();
@@ -641,8 +641,8 @@ int RunMatchClient(const MatchClientOptions& options) {
       }
       continue;
     }
-    const std::string method = event.At("method").AsString();
-    const auto& params = event.At("params").AsObject();
+    const std::string method = event.at("method").get<std::string>();
+    const auto& params = event.at("params");
     if (method == "game_started") {
       game = std::make_unique<MatchGame>(options, evaluator);
       game->Start(params);
