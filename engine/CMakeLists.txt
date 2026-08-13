@@ -16,6 +16,8 @@ endif()
 # ---------------------------------------------------------------------------
 find_package(GTest REQUIRED)
 find_package(Torch REQUIRED)
+find_package(gflags REQUIRED)
+find_package(glog REQUIRED)
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
 
 enable_testing()
@@ -38,7 +40,7 @@ set(ENGINE_SOURCES
 )
 
 add_library(engine_lib ${ENGINE_SOURCES})
-target_link_libraries(engine_lib "${TORCH_LIBRARIES}")
+target_link_libraries(engine_lib "${TORCH_LIBRARIES}" gflags glog)
 
 # ---------------------------------------------------------------------------
 # Test executable
