@@ -5,7 +5,7 @@ This document outlines the development plan for our Gomoku engine with Swap2 sup
 ## 1. Architecture: C++ Engine & Python Training
 
 - **C++ Search Engine**: The MCTS core, board logic, and batched inference manager will be written purely in C++. During self-play, this C++ engine handles the tree search and queries the GPU.
-- **Python Training Pipeline**: Python will be used to manage the cumulative dataset, parse data, and train the PyTorch ResNet model. The trained weights will be exported (e.g., via TorchScript/ONNX) to be loaded by the C++ engine.
+- **Python Training Pipeline**: Python will be used to manage the cumulative dataset, parse data, and train the PyTorch ResNet model. The trained weights will be exported as an AOTInductor `.pt2` package, generating optimized CUDA/Triton kernels for the C++ engine.
 
 ## 2. Advanced Training & Data Strategy
 
@@ -66,7 +66,7 @@ This binary takes in 3 required and 1 optional arguments (see `curriculum.py`):
 - --iteration: Iteration number.
 - --out_dir: Directory to output the game data.
 
-Upon iteration=0, we perform the data seeding process by search upon the `RandomEvaluator`.
+Upon iteration=0, we perform the data seeding process by search upon the `RandomEvaluator` with the endgame evaluator.
 - Keep the last 3 moves of each game. Write the (board, policy, value) training examples according to the format specified by `cumulative_dataset.py`.
 - Test run the curriculum.py to see if the entire pipeline runs properly.
 
@@ -100,11 +100,14 @@ This binary takes in 4 arguments (see `curriculum.py`):
 
 ## 5. Building and Testing
 
-To build the C++ engine and run its unit tests (which require a system installation of `googletest`), run:
+To build the C++ engine and run its unit tests (which require a system installation of `googletest` and PyTorch), run:
 
 ```bash
 mkdir -p build && cd build
-cmake -DCMAKE_BUILD_TYPE=Release ../engine
+# If using a virtual environment with PyTorch:
+cmake -DCMAKE_PREFIX_PATH="../venv/lib/python3.10/site-packages/torch" -DCMAKE_BUILD_TYPE=Release ../engine
+# Or with standard system PyTorch:
+# cmake -DCMAKE_BUILD_TYPE=Release ../engine
 make -j$(nproc)
 ./gomoku_engine_test
 ```

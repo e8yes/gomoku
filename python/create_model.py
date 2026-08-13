@@ -1,25 +1,39 @@
 """
-create_model.py — Export the Gomoku ResNet as a TorchScript model.
+create_model.py — Export the Gomoku ResNet as an AOTInductor model package.
 
 Run from the python/ directory:
 
     python create_model.py
-    # → writes model.pt (copy to build/ before running neural_net_evaluator_tests)
+    # → writes model.pt2 (copy to build/ before running neural_net_evaluator_tests)
 
 Model I/O contract (must match NeuralNetEvaluator / BatchInferenceExecutor):
-    Input:  float32 [batch, 9, 15, 15]
+    Input:  float16 [batch, 9, 15, 15]
     Output: tuple(
-        policy_logits  float32 [batch, 230],   # raw logits; C++ applies masking+softmax
-        value          float32 [batch, 1],      # tanh-bounded scalar in [-1, 1]
-    )
+        policy_logits  float16 [batch, 230],   # raw logits; C++ applies masking+softmax
+        value          float16 [batch, 1],      # tanh-bounded scalar in [-1, 1]
+)
+
+The .pt2 package is compiled by AOTInductor. On CUDA, AOTInductor lowers
+supported operators to Triton/CUDA kernels and exposes the artifact to the
+C++ engine through torch::inductor::AOTIModelPackageLoader.
+
+The current PyTorch AOTInductor package compiler is Linux-only. Generate the
+package in the same Linux environment where the C++ engine will run; the
+Windows/MSYS2 setup is still useful for compiling and unit-testing the engine.
 """
 
 import argparse
+import sys
 import time
 
 import torch
+import torch._inductor
 import torch.nn as nn
-from torchsummary import summary
+
+try:
+    from torchsummary import summary
+except ImportError:
+    summary = None
 
 # Input channel layout (must match NeuralNetEvaluator::kNumInputChannels and
 # the encoding in NeuralNetEvaluator::BoardToTensorImpl):
@@ -60,6 +74,34 @@ NUM_ACTIONS = 230  # must match Board::kNumActions (225 cells + 5 Swap2)
 NUM_FILTERS = 128
 NUM_BLOCKS = 5
 SE_RATIO = 4  # SE bottleneck: filters // SE_RATIO channels
+MAX_EXPORT_BATCH_SIZE = 512
+
+
+def compile_aoti_model(
+    model: nn.Module,
+    example_input: torch.Tensor,
+    export_path: str,
+    max_batch_size: int = MAX_EXPORT_BATCH_SIZE,
+) -> str:
+    """Export a CUDA model and compile it into a C++-loadable AOTI package."""
+    if sys.platform == "win32":
+        raise RuntimeError(
+            "AOTInductor C++ package compilation is currently Linux-only. "
+            "Run the exporter in a Linux/WSL build environment; the Windows "
+            "C++ engine can still be compiled and tested here."
+        )
+    if not export_path.endswith(".pt2"):
+        raise ValueError(f"AOTInductor packages must use a .pt2 path: {export_path}")
+
+    batch_dim = torch.export.Dim("batch", min=1, max=max_batch_size)
+    exported = torch.export.export(
+        model, (example_input,), dynamic_shapes=({0: batch_dim},)
+    )
+    return torch._inductor.aoti_compile_and_package(
+        exported,
+        package_path=export_path,
+        inductor_configs={"max_autotune": True},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -174,7 +216,7 @@ class GomokuNet(nn.Module):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--precision", type=str, choices=["fp16", "fp32"], default="fp32"
+        "--precision", type=str, choices=["fp16"], default="fp16"
     )
     args = parser.parse_args()
 
@@ -183,14 +225,17 @@ def main():
 
     # torchsummary feeds float32 inputs internally, so run it before casting.
     model = GomokuNet().to(device).eval()
-    summary(model, (NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE))
+    if summary is not None:
+        summary(model, (NUM_INPUT_CHANNELS, BOARD_SIZE, BOARD_SIZE))
 
-    # Set precision
-    dtype = torch.float32 if args.precision == "fp32" else torch.float16
-    if args.precision == "fp16":
-        model = model.half()
+    # The C++ executor intentionally uses FP16 inputs to engage CUDA tensor
+    # cores, so exported production packages are always FP16.
+    dtype = torch.float16
+    model = model.half()
 
-    # Trace the model.
+    # Export and compile with AOTInductor. The dynamic batch dimension is
+    # required because the C++ executor coalesces MCTS requests before each
+    # GPU invocation.
     dummy = torch.zeros(
         1,
         NUM_INPUT_CHANNELS,
@@ -199,26 +244,37 @@ def main():
         device=device,
         dtype=dtype,
     )
-    traced = torch.jit.trace(model, dummy)
+    # Export with more than one example item; otherwise Dynamo can infer that
+    # the batch dimension is the constant 1 and reject the dynamic contract.
+    export_dummy = torch.zeros(
+        2,
+        NUM_INPUT_CHANNELS,
+        BOARD_SIZE,
+        BOARD_SIZE,
+        device=device,
+        dtype=dtype,
+    )
+    out_path = "model.pt2"
+    compile_aoti_model(model, export_dummy, out_path)
+    compiled = torch._inductor.aoti_load_package(out_path)
 
     # Sanity check shapes.
     with torch.no_grad():
-        policy, value = traced(dummy)
+        policy, value = compiled(dummy)
     assert policy.shape == (1, NUM_ACTIONS), f"Bad policy shape: {policy.shape}"
     assert value.shape == (1, 1), f"Bad value shape:  {value.shape}"
 
-    out_path = "model.pt"
-    traced.save(out_path)
-    print(f"\nSaved TorchScript model ({args.precision}) → {out_path}")
+    print(f"\nSaved AOTInductor/Triton model ({args.precision}) → {out_path}")
     print(f"  Filters:       {NUM_FILTERS}")
     print(f"  Blocks:        {NUM_BLOCKS}")
     print(f"  Policy shape:  {list(policy.shape)}")
     print(f"  Value shape:   {list(value.shape)}")
 
     # Throughput test:
-    test_model = model.half()
+    test_model = compiled
     BATCH_SIZE = 192
 
+    torch.cuda.synchronize()
     time_begin = time.time()
     NUM_INFERENCE = 1000
     for _ in range(NUM_INFERENCE):
@@ -232,7 +288,9 @@ def main():
             )
             * 0.2345
         )
-        test_model(batch.to(device))
+        with torch.no_grad():
+            test_model(batch.to(device))
+    torch.cuda.synchronize()
     time_end = time.time()
     print(
         f"Average inference time: {(time_end - time_begin) * 1000 / (NUM_INFERENCE * BATCH_SIZE)} ms"
