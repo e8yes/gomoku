@@ -1,5 +1,8 @@
 #include "mcts.h"
 
+#include <algorithm>
+#include <chrono>
+
 #include <gtest/gtest.h>
 
 #include "random_evaluator.h"
@@ -55,10 +58,47 @@ TEST(MCTSTest, SimpleEndgame) {
   EXPECT_EQ(b.stone_to_place(), Player::kBlack);
 
   RandomEvaluator evaluator;
-  MCTS mcts(1000, 32, 1.0f);  // 1000 sims, batch size 32
-  std::vector<float> policy = mcts.Search(b, &evaluator);
+  MCTS mcts(32, 1.0f);  // batch size 32
+  std::vector<float> policy =
+      mcts.Search(b, &evaluator, SearchStoppingCriteria{1000});
 
   int best_move = GetBestAction(policy);
 
   EXPECT_EQ(best_move, Action::FromXY(4, 0).id);  // Index of (4, 0)
+}
+
+TEST(MCTSTest, ExpiredDeadlineReturnsPriorsWithoutSimulating) {
+  Board board;
+  RandomEvaluator evaluator;
+  MCTS mcts(32, 1.0f);
+
+  const auto deadline = std::chrono::milliseconds(0);
+  const std::vector<float> policy =
+      mcts.Search(board, &evaluator, SearchStoppingCriteria{deadline});
+
+  // An already-expired deadline must not spend time on root evaluation or
+  // allocate a search tree. The caller still receives a legal fallback.
+  EXPECT_EQ(mcts.root(), nullptr);
+
+  float policy_sum = 0.0f;
+  for (float probability : policy) policy_sum += probability;
+  EXPECT_NEAR(policy_sum, 1.0f, 1e-5f);
+}
+
+TEST(MCTSTest, VirtualLossDiversifiesLeavesWithinAGpuBatch) {
+  Board board;
+  RandomEvaluator evaluator;
+  MCTS mcts(32, 1.0f);
+
+  // Root expansion happens before the simulation loop. The 32 equal-prior,
+  // equal-value leaf selections below must go to distinct root children. If
+  // virtual loss has the wrong value sign, they pile into one child instead.
+  const std::vector<float> policy =
+      mcts.Search(board, &evaluator, SearchStoppingCriteria{32});
+
+  const int visited_children = static_cast<int>(std::count_if(
+      policy.begin(), policy.end(), [](float probability) {
+        return probability > 0.0f;
+      }));
+  EXPECT_EQ(visited_children, 32);
 }

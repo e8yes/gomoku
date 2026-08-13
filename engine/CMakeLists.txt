@@ -34,6 +34,7 @@ set(ENGINE_SOURCES
   src/vcf_solver.cpp
   src/game_data.cpp
   src/self_play.cpp
+  src/match_json.cpp
 )
 
 add_library(engine_lib ${ENGINE_SOURCES})
@@ -54,6 +55,7 @@ add_executable(gomoku_engine_test
   tests/mcts_noise_test.cpp
   tests/game_data_test.cpp
   tests/self_play_test.cpp
+  tests/match_json_test.cpp
 )
 target_link_libraries(gomoku_engine_test engine_lib GTest::gtest_main "${TORCH_LIBRARIES}")
 add_test(NAME gomoku_engine_test COMMAND gomoku_engine_test)
@@ -78,3 +80,23 @@ add_custom_command(TARGET gomoku_model_evaluator POST_BUILD
   COMMAND ${CMAKE_COMMAND} -E copy $<TARGET_FILE:gomoku_model_evaluator> ${CMAKE_CURRENT_SOURCE_DIR}/../python/
 )
 
+# ---------------------------------------------------------------------------
+# MCTS search diagnostics
+# ---------------------------------------------------------------------------
+
+add_executable(gomoku_mcts_ablation src/gomoku_mcts_ablation.cpp)
+target_link_libraries(gomoku_mcts_ablation engine_lib "${TORCH_LIBRARIES}")
+
+# ---------------------------------------------------------------------------
+# Phase 8 match-server client executable
+# ---------------------------------------------------------------------------
+
+add_library(gomoku_match_client_lib src/match_client.cpp)
+target_link_libraries(gomoku_match_client_lib PUBLIC engine_lib "${TORCH_LIBRARIES}")
+
+if(WIN32)
+  target_link_libraries(gomoku_match_client_lib PRIVATE ws2_32)
+endif()
+
+add_executable(gomoku_match_client src/gomoku_match_client.cpp)
+target_link_libraries(gomoku_match_client gomoku_match_client_lib)

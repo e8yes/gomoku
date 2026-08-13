@@ -110,3 +110,32 @@ We want the protocol — and any independent engines that adopt it — to
 live unencumbered by the AlphaZero stack. Swapping out a board model,
 a rules variant, or a transport should not ripple through a deep
 research codebase.
+
+## Native C++ client
+
+The engine tree now contains a native Phase 8 player, `gomoku_match_client`.
+It implements the same lifecycle as `PlayerClient`: handshake, register,
+optional admin-created pairing, Swap2-aware `your_turn` handling, move
+submission, and `game_finished`. It reconstructs the server's canonical board
+from the complete action history before each search, so the server remains the
+sole referee.
+
+The client uses the engine's persistent MCTS tree and VCF attacker/defender
+callbacks. Pass `--model PATH` for an AOTInductor `.pt2` model; omit it to use
+`RandomEvaluator` for a low-cost network smoke test. Root noise is opt-in via
+`--noise-plies N` and is disabled by default for match play.
+
+Example with the Python server:
+
+```bash
+python -m gomoku_match --listen tcp://127.0.0.1:7901 --admin-token phase8
+gomoku_match_client --name bob --model exported_models/champion36.pt2
+gomoku_match_client --name alice --opponent bob --admin-token phase8 \
+  --model exported_models/champion36.pt2
+PYTHONPATH=python python examples/spectator.py --host 127.0.0.1 --port 7901
+```
+
+The C++ client is portable across the supported native builds: CMake links
+Winsock (`ws2_32`) on Windows and uses BSD sockets on Linux. The wire codec is
+kept in `engine/src/match_json.*` and has unit coverage in
+`engine/tests/match_json_test.cpp`.

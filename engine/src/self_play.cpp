@@ -3,10 +3,10 @@
 #include <algorithm>
 #include <random>
 #include <stdexcept>
+#include <unordered_map>
 #include <utility>
 
 #include "random_evaluator.h"
-#include "vcf_solver.h"
 
 namespace {
 
@@ -21,9 +21,10 @@ struct PlayedGame {
   int action_count = 0;
 };
 
-void ValidateConfig(const Config& config) {
+void ValidateConfig(const SelfPlayConfig& config) {
   if (config.simulations <= 0 || config.batch_size <= 0 ||
-      config.keep_last_moves < 0 || config.dirichlet_noise_plies < 0) {
+      config.keep_last_moves < 0 || config.dirichlet_noise_plies < 0 ||
+      config.stochastic_action_plies < 0) {
     throw std::invalid_argument("Invalid self-play search configuration");
   }
 }
@@ -82,18 +83,16 @@ std::uint64_t ResolveSeed(std::uint64_t seed) {
          static_cast<std::uint64_t>(random_device());
 }
 
-PlayedGame RunGame(const Config& config, const EvaluatorSelector& selector,
-                   EndgameSolver endgame_solver) {
+PlayedGame RunGame(const SelfPlayConfig& config,
+                   const EvaluatorSelector& selector,
+                   EndgameSolver endgame_solver,
+                   EndgameDefenseSolver defensive_solver) {
   ValidateConfig(config);
   if (!selector) throw std::invalid_argument("Evaluator selector is empty");
 
   EndgameSolver solver = std::move(endgame_solver);
-  if (!solver) {
-    solver = [](const Board& board) { return SolveVCF(board); };
-  }
 
-  MCTS mcts(config.simulations, config.batch_size, config.c_puct,
-            config.dirichlet_noise);
+  std::unordered_map<Evaluator*, std::unique_ptr<MCTS>> searches;
   std::mt19937_64 random_engine(ResolveSeed(config.seed));
 
   PlayedGame played_game;
@@ -110,19 +109,40 @@ PlayedGame RunGame(const Config& config, const EvaluatorSelector& selector,
       throw std::runtime_error("Evaluator selector returned null");
     }
 
-    const std::vector<float> policy = mcts.Search(board, evaluator, solver);
+    auto search = searches.find(evaluator);
+    if (search == searches.end()) {
+      std::optional<DirichletNoiseConfig> noise = config.dirichlet_noise;
+      if (noise && config.dirichlet_noise_plies > 0 &&
+          action_count >= config.dirichlet_noise_plies) {
+        noise = std::nullopt;
+      }
+      search =
+          searches
+              .emplace(evaluator, std::make_unique<MCTS>(config.batch_size,
+                                                         config.c_puct, noise))
+              .first;
+    }
+
+    const std::vector<float> policy = search->second->Search(
+        board, evaluator, SearchStoppingCriteria{config.simulations}, solver,
+        defensive_solver);
     const int action =
-        SampleAction(board, policy, config.sample_actions, &random_engine);
+        SampleAction(board, policy, ShouldSampleAction(config, action_count),
+                     &random_engine);
     if (action < 0) break;
 
     played_game.history.push_back(PositionRecord{board, policy});
     board.Apply(action);
-    mcts.SelectAction(action);
+    for (auto& [_, player_search] : searches) {
+      player_search->SelectAction(action);
+    }
     played_game.action_count = action_count + 1;
 
     if (config.dirichlet_noise && config.dirichlet_noise_plies > 0 &&
         played_game.action_count >= config.dirichlet_noise_plies) {
-      mcts.SetDirichletNoise(std::nullopt);
+      for (auto& [_, player_search] : searches) {
+        player_search->SetDirichletNoise(std::nullopt);
+      }
     }
   }
 
@@ -137,33 +157,46 @@ PlayedGame RunGame(const Config& config, const EvaluatorSelector& selector,
 
 }  // namespace
 
-GameResult PlayGame(const Config& config, const EvaluatorSelector& selector,
-                    EndgameSolver endgame_solver) {
-  const PlayedGame played_game =
-      RunGame(config, selector, std::move(endgame_solver));
+bool ShouldSampleAction(const SelfPlayConfig& config, int decision_ply) {
+  if (!config.sample_actions) return false;
+  if (decision_ply < 0) {
+    throw std::invalid_argument("Decision ply must not be negative");
+  }
+  return config.stochastic_action_plies == 0 ||
+         decision_ply < config.stochastic_action_plies;
+}
+
+GameResult PlayGame(const SelfPlayConfig& config,
+                    const EvaluatorSelector& selector,
+                    EndgameSolver endgame_solver,
+                    EndgameDefenseSolver defensive_solver) {
+  const PlayedGame played_game = RunGame(
+      config, selector, std::move(endgame_solver), std::move(defensive_solver));
   return GameResult{played_game.final_board.result(), played_game.action_count};
 }
 
-std::vector<TrainingExample> GenerateGame(const Config& config,
-                                          Evaluator* evaluator,
-                                          EndgameSolver endgame_solver) {
-  RandomEvaluator fallback_evaluator;
-  Evaluator* active_evaluator =
-      evaluator != nullptr ? evaluator : &fallback_evaluator;
-  const EvaluatorSelector selector = [active_evaluator](const Board&) {
-    return active_evaluator;
-  };
-  const PlayedGame played_game =
-      RunGame(config, selector, std::move(endgame_solver));
+std::vector<TrainingExample> GenerateGame(
+    const SelfPlayConfig& config, const EvaluatorSelector& selector,
+    const TrainingPositionFilter& training_position_filter,
+    EndgameSolver endgame_solver, EndgameDefenseSolver defensive_solver) {
+  const PlayedGame played_game = RunGame(
+      config, selector, std::move(endgame_solver), std::move(defensive_solver));
 
   const std::size_t keep =
-      std::min<std::size_t>(static_cast<std::size_t>(config.keep_last_moves),
-                            played_game.history.size());
+      config.keep_last_moves == 0
+          ? played_game.history.size()
+          : std::min<std::size_t>(
+                static_cast<std::size_t>(config.keep_last_moves),
+                played_game.history.size());
   const std::size_t first = played_game.history.size() - keep;
 
   std::vector<TrainingExample> examples;
   examples.reserve(keep);
   for (std::size_t i = first; i < played_game.history.size(); ++i) {
+    if (training_position_filter &&
+        !training_position_filter(played_game.history[i].board)) {
+      continue;
+    }
     TrainingExample example;
     example.board = played_game.history[i].board;
     example.policy = std::move(played_game.history[i].policy);
@@ -172,4 +205,17 @@ std::vector<TrainingExample> GenerateGame(const Config& config,
     examples.push_back(std::move(example));
   }
   return examples;
+}
+
+std::vector<TrainingExample> GenerateGame(
+    const SelfPlayConfig& config, Evaluator* evaluator,
+    EndgameSolver endgame_solver, EndgameDefenseSolver defensive_solver) {
+  RandomEvaluator fallback_evaluator;
+  Evaluator* active_evaluator =
+      evaluator != nullptr ? evaluator : &fallback_evaluator;
+  const EvaluatorSelector selector = [active_evaluator](const Board&) {
+    return active_evaluator;
+  };
+  return GenerateGame(config, selector, {}, std::move(endgame_solver),
+                      std::move(defensive_solver));
 }

@@ -5,7 +5,7 @@
 #include <sstream>
 #include <vector>
 
-#include "board.h"
+#include "neural_net_evaluator.h"
 
 namespace {
 
@@ -16,6 +16,27 @@ bool GetPackedBit(const std::array<std::uint8_t, kPackedStateBytes>& packed,
 
 int FeatureBitIndex(int channel, int x, int y) {
   return channel * Board::kNumCells + y * Board::kSize + x;
+}
+
+void ExpectPackedStateMatchesRuntimeTensor(const Board& board) {
+  const auto packed = PackBoard(board);
+  const torch::Tensor tensor =
+      neural_net_evaluator_internal::BoardToTensor(board);
+
+  ASSERT_EQ(tensor.sizes(),
+            torch::IntArrayRef({9, Board::kSize, Board::kSize}));
+  ASSERT_EQ(tensor.scalar_type(), torch::kFloat);
+  ASSERT_TRUE(tensor.device().is_cpu());
+  const auto tensor_accessor = tensor.accessor<float, 3>();
+  for (int channel = 0; channel < 9; ++channel) {
+    for (int y = 0; y < Board::kSize; ++y) {
+      for (int x = 0; x < Board::kSize; ++x) {
+        EXPECT_EQ(GetPackedBit(packed, FeatureBitIndex(channel, x, y)),
+                  tensor_accessor[channel][y][x] == 1.0f)
+            << "channel=" << channel << " x=" << x << " y=" << y;
+      }
+    }
+  }
 }
 
 std::uint16_t ReadLittleEndian16(const std::string& bytes, std::size_t offset) {
@@ -51,6 +72,49 @@ TEST(GameDataTest, PacksTheSameFeaturePlaneOrderAsTheModel) {
   EXPECT_TRUE(GetPackedBit(after_move, FeatureBitIndex(1, 7, 7)));
   EXPECT_FALSE(GetPackedBit(after_move, FeatureBitIndex(2, 7, 7)));
   EXPECT_TRUE(GetPackedBit(after_move, FeatureBitIndex(3, 7, 7)));
+}
+
+TEST(GameDataTest, PackedTrainingStateMatchesRuntimeTensorAcrossSwap2Phases) {
+  Board board;
+  ExpectPackedStateMatchesRuntimeTensor(board);
+
+  board.Apply(Action::FromXY(7, 7).id);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+  board.Apply(Action::FromXY(7, 8).id);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+  board.Apply(Action::FromXY(8, 7).id);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+
+  // The no-stone phases are especially important: the encoder deliberately
+  // uses Black as a stable first-person fallback while exposing phase planes.
+  ASSERT_EQ(board.phase(), Phase::kSwap2Decision);
+  ASSERT_EQ(board.stone_to_place(), Player::kNone);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+
+  board.Apply(Action::kSwap2PlaceTwo);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+  board.Apply(Action::FromXY(6, 7).id);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+  board.Apply(Action::FromXY(8, 8).id);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+
+  ASSERT_EQ(board.phase(), Phase::kChooseColor);
+  ASSERT_EQ(board.stone_to_place(), Player::kNone);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+
+  board.Apply(Action::kChooseBlack);
+  ASSERT_EQ(board.phase(), Phase::kStandard);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+  board.Apply(Action::FromXY(6, 8).id);
+  ExpectPackedStateMatchesRuntimeTensor(board);
+
+  Board choose_directly;
+  choose_directly.Apply(Action::FromXY(7, 7).id);
+  choose_directly.Apply(Action::FromXY(7, 8).id);
+  choose_directly.Apply(Action::FromXY(8, 7).id);
+  choose_directly.Apply(Action::kSwap2ChooseWhite);
+  ASSERT_EQ(choose_directly.phase(), Phase::kStandard);
+  ExpectPackedStateMatchesRuntimeTensor(choose_directly);
 }
 
 TEST(GameDataTest, WritesTheDocumented716ByteRecord) {

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -29,25 +30,33 @@
 namespace {
 
 constexpr int kWorkerCount = 12;
-constexpr int kSimulationsPerMove = 400;
+constexpr int kDefaultSimulationsPerMove = 800;
 constexpr int kSearchBatchSize = 32;
 constexpr int kInferenceBatchRequests = 6;
 constexpr int kInferenceWaitMicroseconds = 500;
 constexpr float kCPuct = 1.0f;
 constexpr float kDirichletAlpha = 0.3f;
 constexpr float kDirichletEpsilon = 0.25f;
+constexpr int kExplorationPlies = 6;
 
 struct Arguments {
   int games = 0;
   int iteration = -1;
+  int simulations = kDefaultSimulationsPerMove;
   std::filesystem::path out_dir;
   std::filesystem::path champion_model_path;
+  std::filesystem::path previous_champion_model_path;
+  double previous_champion_mix_fraction = 0.0;
+  bool disable_endgame_solver = false;
 };
 
 void PrintUsage(const char* program) {
   std::cerr << "Usage: " << program
             << " --games N --iteration N --out_dir PATH"
-               " [--champion_model_path PATH]\n";
+               " [--simulations N] [--champion_model_path PATH]"
+               " [--previous_champion_model_path PATH"
+               " --previous_champion_mix_fraction F]"
+               " [--disable_endgame_solver]\n";
 }
 
 int ParseInt(const std::string& text, const char* option) {
@@ -65,6 +74,20 @@ int ParseInt(const std::string& text, const char* option) {
   return static_cast<int>(value);
 }
 
+double ParseDouble(const std::string& text, const char* option) {
+  std::size_t consumed = 0;
+  double value = 0.0;
+  try {
+    value = std::stod(text, &consumed);
+  } catch (const std::exception&) {
+    throw std::invalid_argument(std::string(option) + " requires a number");
+  }
+  if (consumed != text.size() || !std::isfinite(value)) {
+    throw std::invalid_argument(std::string(option) + " requires a number");
+  }
+  return value;
+}
+
 Arguments ParseArguments(int argc, char** argv) {
   Arguments arguments;
   for (int i = 1; i < argc; ++i) {
@@ -72,6 +95,10 @@ Arguments ParseArguments(int argc, char** argv) {
     if (option == "--help" || option == "-h") {
       PrintUsage(argv[0]);
       std::exit(0);
+    }
+    if (option == "--disable_endgame_solver") {
+      arguments.disable_endgame_solver = true;
+      continue;
     }
     if (i + 1 >= argc) {
       throw std::invalid_argument(option + " requires a value");
@@ -82,10 +109,17 @@ Arguments ParseArguments(int argc, char** argv) {
       arguments.games = ParseInt(value, "--games");
     } else if (option == "--iteration") {
       arguments.iteration = ParseInt(value, "--iteration");
+    } else if (option == "--simulations") {
+      arguments.simulations = ParseInt(value, "--simulations");
     } else if (option == "--out_dir") {
       arguments.out_dir = value;
     } else if (option == "--champion_model_path") {
       arguments.champion_model_path = value;
+    } else if (option == "--previous_champion_model_path") {
+      arguments.previous_champion_model_path = value;
+    } else if (option == "--previous_champion_mix_fraction") {
+      arguments.previous_champion_mix_fraction =
+          ParseDouble(value, "--previous_champion_mix_fraction");
     } else {
       throw std::invalid_argument("Unknown option: " + option);
     }
@@ -94,11 +128,29 @@ Arguments ParseArguments(int argc, char** argv) {
   if (arguments.games <= 0) {
     throw std::invalid_argument("--games must be greater than zero");
   }
+  if (arguments.simulations <= 0) {
+    throw std::invalid_argument("--simulations must be greater than zero");
+  }
   if (arguments.iteration < 0 || arguments.iteration > 50) {
     throw std::invalid_argument("--iteration must be between 0 and 50");
   }
   if (arguments.out_dir.empty()) {
     throw std::invalid_argument("--out_dir is required");
+  }
+  if (arguments.previous_champion_mix_fraction < 0.0 ||
+      arguments.previous_champion_mix_fraction > 1.0) {
+    throw std::invalid_argument(
+        "--previous_champion_mix_fraction must be between zero and one");
+  }
+  const bool mixing_requested = arguments.previous_champion_mix_fraction > 0.0;
+  if (mixing_requested != !arguments.previous_champion_model_path.empty()) {
+    throw std::invalid_argument(
+        "Previous-champion model and positive mix fraction must be supplied "
+        "together");
+  }
+  if (mixing_requested && arguments.champion_model_path.empty()) {
+    throw std::invalid_argument(
+        "Previous-champion mixing requires a current champion model");
   }
   return arguments;
 }
@@ -136,6 +188,8 @@ int main(int argc, char** argv) {
     // (192 boards) for a GPU pass.
     std::shared_ptr<BatchInferenceExecutor> inference_executor;
     std::unique_ptr<NeuralNetEvaluator> neural_evaluator;
+    std::shared_ptr<BatchInferenceExecutor> previous_inference_executor;
+    std::unique_ptr<NeuralNetEvaluator> previous_neural_evaluator;
     std::unique_ptr<RandomEvaluator> random_evaluator;
     Evaluator* evaluator = nullptr;
 
@@ -158,6 +212,22 @@ int main(int argc, char** argv) {
       evaluator = neural_evaluator.get();
       std::cout << "Using champion model: "
                 << arguments.champion_model_path.string() << "\n";
+
+      if (!arguments.previous_champion_model_path.empty()) {
+        if (!std::filesystem::exists(arguments.previous_champion_model_path)) {
+          throw std::invalid_argument(
+              "Previous champion model does not exist: " +
+              arguments.previous_champion_model_path.string());
+        }
+        previous_inference_executor = std::make_shared<BatchInferenceExecutor>(
+            arguments.previous_champion_model_path, torch::Device(torch::kCUDA),
+            kInferenceBatchRequests,
+            std::chrono::microseconds(kInferenceWaitMicroseconds));
+        previous_neural_evaluator = std::make_unique<NeuralNetEvaluator>(
+            std::move(previous_inference_executor));
+        std::cout << "Using previous champion model: "
+                  << arguments.previous_champion_model_path.string() << "\n";
+      }
     } else {
       random_evaluator = std::make_unique<RandomEvaluator>();
       evaluator = random_evaluator.get();
@@ -165,13 +235,37 @@ int main(int argc, char** argv) {
     }
 
     const std::uint64_t base_seed = MakeSeed();
-    const int keep_last_moves = arguments.iteration + 3;
+    // Emit every non-terminal position. Recency is controlled by the Python
+    // dataset sampler instead of an iteration-dependent horizon window.
+    const int keep_last_moves = 0;
+    const int mixed_game_count = static_cast<int>(std::llround(
+        arguments.previous_champion_mix_fraction * arguments.games));
     std::cout << "Generating " << arguments.games << " games with "
-              << kWorkerCount << " workers, " << kSimulationsPerMove
-              << " simulations/move, keeping the final " << keep_last_moves
-              << " positions\n";
+              << kWorkerCount << " workers, " << arguments.simulations
+              << " simulations/move, root noise and stochastic actions for "
+              << "the first " << kExplorationPlies
+              << " decision plies, then argmax action selection with "
+              << "neutral PUCT tie-breaking, keeping all non-terminal "
+              << "positions"
+              << (arguments.disable_endgame_solver
+                      ? "; endgame solver disabled"
+                      : "; VCF attacker/defender enabled")
+              << "\n";
+    if (mixed_game_count > 0) {
+      std::cout << "Mixing " << mixed_game_count
+                << " games against the previous champion with seats balanced; "
+                   "only current-champion positions will be emitted from "
+                   "those games\n";
+    }
 
-    EndgameSolver solver = [](const Board& board) { return SolveVCF(board); };
+    EndgameSolver solver;
+    EndgameDefenseSolver defensive_solver;
+    if (!arguments.disable_endgame_solver) {
+      solver = [](const Board& board) { return SolveVCF(board); };
+      defensive_solver = [](const Board& board) {
+        return AnalyzeVCFDefense(board);
+      };
+    }
 
     std::atomic<int> next_game{0};
     std::atomic<int> completed_games{0};
@@ -186,17 +280,43 @@ int main(int argc, char** argv) {
           const int game = next_game.fetch_add(1, std::memory_order_relaxed);
           if (game >= arguments.games) break;
 
-          Config config;
-          config.simulations = kSimulationsPerMove;
+          SelfPlayConfig config;
+          config.simulations = arguments.simulations;
           config.batch_size = kSearchBatchSize;
           config.c_puct = kCPuct;
           config.seed = base_seed + static_cast<std::uint64_t>(game);
           config.keep_last_moves = keep_last_moves;
           config.dirichlet_noise = DirichletNoiseConfig{
               kDirichletAlpha, kDirichletEpsilon, config.seed};
-
-          const std::vector<TrainingExample> examples =
-              GenerateGame(config, evaluator, solver);
+          config.dirichlet_noise_plies = kExplorationPlies;
+          config.stochastic_action_plies = kExplorationPlies;
+          std::vector<TrainingExample> examples;
+          const std::int64_t mixed_before = static_cast<std::int64_t>(game) *
+                                            mixed_game_count / arguments.games;
+          const std::int64_t mixed_through =
+              static_cast<std::int64_t>(game + 1) * mixed_game_count /
+              arguments.games;
+          const bool mixed_game = mixed_through > mixed_before;
+          if (mixed_game) {
+            const int mixed_ordinal = static_cast<int>(mixed_through - 1);
+            const Seat current_champion_seat =
+                mixed_ordinal % 2 == 0 ? Seat::kA : Seat::kB;
+            const EvaluatorSelector selector =
+                [&](const Board& board) -> Evaluator* {
+              return board.current_player() == current_champion_seat
+                         ? evaluator
+                         : previous_neural_evaluator.get();
+            };
+            const TrainingPositionFilter keep_current_champion =
+                [&](const Board& board) {
+                  return board.current_player() == current_champion_seat;
+                };
+            examples = GenerateGame(config, selector, keep_current_champion,
+                                    solver, defensive_solver);
+          } else {
+            examples =
+                GenerateGame(config, evaluator, solver, defensive_solver);
+          }
 
           {
             std::lock_guard<std::mutex> lock(output_mutex);
