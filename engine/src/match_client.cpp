@@ -228,12 +228,11 @@ class RpcClient {
       const std::string& method, JsonValue params,
       std::chrono::milliseconds timeout = std::chrono::milliseconds(5000)) {
     const std::string id = "cpp-" + std::to_string(next_id_++);
-    JsonValue request = {
-        {"jsonrpc", "2.0"},
-        {"id", id},
-        {"method", method},
-        {"params", std::move(params)},
-    };
+    JsonValue request = JsonValue::object();
+    request["jsonrpc"] = "2.0";
+    request["id"] = id;
+    request["method"] = method;
+    request["params"] = std::move(params);
     try {
       connection_.SendLine(request.dump());
     } catch (const std::exception& error) {
@@ -246,6 +245,9 @@ class RpcClient {
       return responses_.find(id) != responses_.end() || closed_;
     });
     if (!received || responses_.find(id) == responses_.end()) {
+      if (!reader_error_.empty()) {
+        throw RpcError(method + " failed: " + reader_error_);
+      }
       throw RpcError(method + " timed out or transport closed");
     }
     JsonValue response = std::move(responses_.at(id));
@@ -312,7 +314,8 @@ class RpcClient {
         std::lock_guard<std::mutex> lock(mutex_);
         if (message.contains("id") && message["id"].is_string() &&
             (message.contains("result") || message.contains("error"))) {
-          responses_[message["id"].get<std::string>()] = std::move(message);
+          const std::string response_id = message["id"].get<std::string>();
+          responses_[response_id] = std::move(message);
           response_condition_.notify_all();
         } else if (message.contains("method")) {
           events_.push_back(std::move(message));
@@ -573,10 +576,10 @@ int RunMatchClient(const MatchClientOptions& options) {
   }
 
   RpcClient rpc(options.host, options.port);
-  JsonValue handshake = {
+  JsonValue handshake = Params({
       {"protocol_version", "2.0"},
       {"client_name", options.name},
-  };
+  });
   if (!options.auth_token.empty()) {
     handshake["auth_token"] = options.auth_token;
   }
