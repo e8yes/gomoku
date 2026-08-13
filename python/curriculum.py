@@ -8,6 +8,10 @@ import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
+import sys
+
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 import torch
 from create_model import BOARD_SIZE, NUM_INPUT_CHANNELS, GomokuNet, compile_aoti_model
 from train import train
@@ -17,6 +21,9 @@ from train import train
 class CurriculumConfig:
     # Data directory
     data_dir: str = "data"
+
+    # Diagnostic output directory
+    diagnostics_dir: str = "diagnostics"
 
     # PyTorch model path (.pth)
     weights_dir: str = "weights"
@@ -31,6 +38,7 @@ class CurriculumConfig:
     model_evaluator_bin: str = "./gomoku_model_evaluator"
 
     # Number of iterations
+    start_iteration: int = 0
     num_iterations: int = 50
 
     # Games per iteration
@@ -70,7 +78,7 @@ class IterationSummary:
     iteration: int = 0
     policy_loss: float = 0.0
     value_loss: float = 0.0
-    challenger_win_rate: float = 0.0
+    win_rate: float = 0.0
     promoted: bool = False
 
 
@@ -163,6 +171,8 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
 
     if not os.path.exists(config.data_dir):
         os.makedirs(config.data_dir)
+    if not os.path.exists(config.model_export_path):
+        os.makedirs(config.model_export_path)
     assert os.path.exists(config.data_dir), (
         f"Data directory {config.data_dir} does not exist!"
     )
