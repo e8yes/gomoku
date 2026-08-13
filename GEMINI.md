@@ -1,6 +1,6 @@
 # Gomoku Engine Development Plan (AlphaZero Approach)
 
-This document outlines the development plan for our Gomoku engine with Swap2 support, competing against Claude Code on the `gomoku_match` server. We are utilizing an **AlphaZero-style architecture (MCTS + Neural Network)** trained over 10 days on an RTX 4060 Ti.
+This document outlines the development plan for our Gomoku engine with Swap2 support, competing against other agents on the `gomoku_match` server. We are utilizing an **AlphaZero-style architecture (MCTS + Neural Network)** trained over 10 days on an RTX 4060 Ti.
 
 ## 1. Architecture: C++ Engine & Python Training
 

@@ -1,11 +1,23 @@
 #pragma once
 
+#include <cstdint>
 #include <memory>
+#include <optional>
+#include <random>
 #include <unordered_map>
 #include <vector>
 
 #include "board.h"
+#include "endgame_solver.h"
 #include "evaluator.h"
+
+// AlphaZero-style root noise. Noise is opt-in; an omitted configuration keeps
+// MCTS deterministic and suitable for evaluation.
+struct DirichletNoiseConfig {
+  float alpha = 0.3f;
+  float epsilon = 0.25f;
+  std::uint64_t seed = 0;  // Zero selects a nondeterministic seed.
+};
 
 class MCTSNode {
  public:
@@ -61,11 +73,15 @@ class MCTSNode {
 class MCTS {
  public:
   // Initializes the MCTS engine with search hyperparameters.
-  MCTS(int num_simulations, int batch_size, float c_puct);
+  MCTS(int num_simulations, int batch_size, float c_puct,
+       std::optional<DirichletNoiseConfig> dirichlet_noise = std::nullopt);
 
   // Performs MCTS search from the current root_board and returns the
-  // simulated policy (normalized visit counts for each action).
-  std::vector<float> Search(const Board& root_board, Evaluator* evaluator);
+  // simulated policy (normalized visit counts for each action). When an
+  // endgame solver is supplied, a proven root win is returned immediately and
+  // proven leaf wins override neural evaluation.
+  std::vector<float> Search(const Board& root_board, Evaluator* evaluator,
+                            EndgameSolver endgame_solver = {});
 
   // Advances the root node to the child corresponding to action_id, preserving
   // the search tree for future searches. Discards the rest of the tree.
@@ -81,6 +97,8 @@ class MCTS {
   int num_simulations_;
   int batch_size_;
   float c_puct_;
+  std::optional<DirichletNoiseConfig> dirichlet_noise_;
+  std::mt19937_64 random_engine_;
 
   std::unique_ptr<MCTSNode> root_;
   std::unordered_map<BoardSignature, EvaluationResult, BoardSignatureHash>
