@@ -87,3 +87,8 @@ __pycache__/
 
 # Test data
 test_data/
+data/
+exported_models/
+diagnostics/
+logs/
+

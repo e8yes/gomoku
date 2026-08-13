@@ -32,6 +32,8 @@ set(ENGINE_SOURCES
   src/batch_inference_executor.cpp
   src/neural_net_evaluator.cpp
   src/vcf_solver.cpp
+  src/game_data.cpp
+  src/seed_game.cpp
 )
 
 add_library(engine_lib ${ENGINE_SOURCES})
@@ -50,6 +52,15 @@ add_executable(gomoku_engine_test
   tests/vcf_solver_test.cpp
   tests/mcts_endgame_solver_test.cpp
   tests/mcts_noise_test.cpp
+  tests/game_data_test.cpp
+  tests/seed_game_test.cpp
 )
 target_link_libraries(gomoku_engine_test engine_lib GTest::gtest_main "${TORCH_LIBRARIES}")
 add_test(NAME gomoku_engine_test COMMAND gomoku_engine_test)
+
+# ---------------------------------------------------------------------------
+# Phase 5 data-seeding executable
+# ---------------------------------------------------------------------------
+
+add_executable(gomoku_game_generator src/gomoku_game_generator.cpp)
+target_link_libraries(gomoku_game_generator engine_lib "${TORCH_LIBRARIES}")
