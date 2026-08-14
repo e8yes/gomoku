@@ -364,3 +364,41 @@ TEST(VcfSolverTest, TargetedDefensiveAnalysisDisruptsMultiStepThreat) {
   EXPECT_TRUE(has_key_square);
 }
 
+TEST(VcfSolverTest, GappedSplitFourAttackerSequence) {
+  // Black has stones at (3, 7), (4, 7), (5, 7), (7, 7) [XXX_X split four pattern]
+  // with gap at (6, 7) and open endpoints at (2, 7) and (8, 7).
+  Position position(Stone::kBlack);
+  Put(&position, Stone::kBlack, {{3, 7}, {4, 7}, {5, 7}, {7, 7}});
+  Put(&position, Stone::kWhite, {{1, 7}, {9, 7}});
+
+  // Black plays (8, 7) -> creates a split four (3..5, 7, 8) with winning square (6, 7)
+  // Or Black plays (6, 7) -> creates an immediate exact five.
+  const std::vector<int> line = SolveVCF(position);
+  ASSERT_FALSE(line.empty());
+  // Immediate win takes priority: (6, 7) makes exact five
+  EXPECT_EQ(line.front(), VcfActionFromXY(6, 7));
+}
+
+TEST(VcfSolverTest, GappedCounterFourDefendsAgainstVcfThreat) {
+  // White has a VCF threat: White can play (6, 10) to make a double four.
+  Position position(Stone::kBlack);
+  Put(&position, Stone::kWhite,
+      {{3, 10}, {4, 10}, {5, 10}, {6, 7}, {6, 8}, {6, 9}});
+  Put(&position, Stone::kBlack, {{2, 10}, {6, 6}});
+
+  // Black has a distant line on row 2: stones at (3, 2), (4, 2), (5, 2)
+  Put(&position, Stone::kBlack, {{3, 2}, {4, 2}, {5, 2}});
+  Put(&position, Stone::kWhite, {{2, 2}});
+
+  // Black playing (7, 2) creates a gapped four: (3,2), (4,2), (5,2), [gap at 6,2], (7,2),
+  // threatening immediate win at (6, 2).
+  const EndgameDefenseAnalysis analysis = AnalyzeVCFDefense(position);
+  ASSERT_TRUE(analysis.threat_detected);
+
+  const int gapped_counter_action = VcfActionFromXY(7, 2);
+  const bool includes_gapped_counter =
+      std::find(analysis.safe_actions.begin(), analysis.safe_actions.end(),
+                gapped_counter_action) != analysis.safe_actions.end();
+  EXPECT_TRUE(includes_gapped_counter);
+}
+

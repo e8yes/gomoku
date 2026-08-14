@@ -149,20 +149,6 @@ std::vector<int> FindWinningMovesAround(const Position& position,
   return winning_moves;
 }
 
-bool HasFriendlyStoneNearby(const Position& position, int x, int y,
-                            Stone stone) {
-  for (const auto& direction : kDirections) {
-    const int dx = direction[0];
-    const int dy = direction[1];
-    if (CountInDirection(position, x, y, dx, dy, stone) +
-            CountInDirection(position, x, y, -dx, -dy, stone) >=
-        1) {
-      return true;
-    }
-  }
-  return false;
-}
-
 bool Search(const Position& position, SearchContext* context,
             std::vector<int>* line) {
   if (++context->visited_nodes > context->max_nodes) {
@@ -188,15 +174,9 @@ bool Search(const Position& position, SearchContext* context,
     return true;
   }
 
-  // Every legal move that has a friendly stone nearby is considered.
+  // Every legal move is considered.
   for (int attack_action = 0; attack_action < kVcfNumCells; ++attack_action) {
     if (!position.IsEmpty(attack_action)) continue;
-
-    const int ax = VcfActionX(attack_action);
-    const int ay = VcfActionY(attack_action);
-    if (!HasFriendlyStoneNearby(position, ax, ay, context->attacker)) {
-      continue;
-    }
 
     Position after_attack = position;
     after_attack.Set(attack_action, context->attacker);
@@ -373,9 +353,6 @@ EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position, int max_nodes
         candidate_actions.end()) {
       continue;
     }
-    const int ax = VcfActionX(action);
-    const int ay = VcfActionY(action);
-    if (!HasFriendlyStoneNearby(position, ax, ay, defender)) continue;
 
     Position after_counter = position;
     after_counter.Set(action, defender);
