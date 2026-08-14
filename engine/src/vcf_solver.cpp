@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <unordered_set>
 
 #include "board.h"
@@ -33,35 +34,64 @@ int CountInDirection(const Position& position, int x, int y, int dx, int dy,
   return count;
 }
 
-using BoardKey = std::array<std::uint8_t, kVcfNumCells>;
+std::uint64_t SplitMix64(std::uint64_t* state) {
+  *state += 0x9E3779B97F4A7C15ULL;
+  std::uint64_t z = *state;
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  return z ^ (z >> 31);
+}
 
-struct BoardKeyHash {
-  std::size_t operator()(const BoardKey& key) const {
-    // Hash the complete board key. Equality still compares every cell, so a
-    // hash collision cannot change the solver's answer.
-    std::size_t hash = 1469598103934665603ULL;
-    for (std::uint8_t cell : key) {
-      hash ^= static_cast<std::size_t>(cell);
-      hash *= 1099511628211ULL;
+// One 64-bit key per (cell, stone color). Positions are identified by the
+// XOR of the keys of their occupied cells, updated incrementally on
+// make/unmake. A collision could in principle prune a solvable branch, but
+// at <= max_nodes distinct positions per search the probability is
+// negligible, and the solver is already allowed to miss lines (node budget).
+const std::array<std::array<std::uint64_t, 2>, kVcfNumCells>& ZobristKeys() {
+  static const auto keys = [] {
+    std::array<std::array<std::uint64_t, 2>, kVcfNumCells> table{};
+    std::uint64_t state = 0x6D9F0A54C428F0B3ULL;
+    for (auto& cell : table) {
+      cell[0] = SplitMix64(&state);
+      cell[1] = SplitMix64(&state);
     }
-    return hash;
+    return table;
+  }();
+  return keys;
+}
+
+int ZobristStoneIndex(Stone stone) { return stone == Stone::kBlack ? 0 : 1; }
+
+std::uint64_t HashPosition(const Position& position) {
+  std::uint64_t hash = 0;
+  for (int action = 0; action < kVcfNumCells; ++action) {
+    const Stone stone = position.At(action);
+    if (stone != Stone::kEmpty) {
+      hash ^= ZobristKeys()[action][ZobristStoneIndex(stone)];
+    }
   }
-};
+  return hash;
+}
 
 struct SearchContext {
   Stone attacker;
   Stone defender;
   int max_nodes = kDefaultMaxVcfNodes;
   int visited_nodes = 0;
-  std::unordered_set<BoardKey, BoardKeyHash> failed_positions;
+  std::uint64_t hash = 0;
+  std::unordered_set<std::uint64_t> failed_positions;
 };
 
-BoardKey MakeKey(const Position& position) {
-  BoardKey key{};
-  for (int action = 0; action < kVcfNumCells; ++action) {
-    key[action] = static_cast<std::uint8_t>(position.At(action));
-  }
-  return key;
+void MakeMove(Position* position, SearchContext* context, int action,
+              Stone stone) {
+  position->Set(action, stone);
+  context->hash ^= ZobristKeys()[action][ZobristStoneIndex(stone)];
+}
+
+void UnmakeMove(Position* position, SearchContext* context, int action,
+                Stone stone) {
+  position->Set(action, Stone::kEmpty);
+  context->hash ^= ZobristKeys()[action][ZobristStoneIndex(stone)];
 }
 
 bool HasExactFive(const Position& position, Stone stone) {
@@ -167,7 +197,9 @@ bool HasStoneWithinLineDistance4(const Position& position, int x, int y,
   return false;
 }
 
-bool Search(const Position& position, SearchContext* context,
+// Searches in place: `position` is mutated via make/unmake and is restored
+// to its entry state on every return path.
+bool Search(Position* position, SearchContext* context,
             std::vector<int>* line) {
   if (++context->visited_nodes > context->max_nodes) {
     return false;
@@ -175,61 +207,75 @@ bool Search(const Position& position, SearchContext* context,
 
   // A VCF is a forcing continuation from a live position. A position that
   // already contains a five has already ended and is not a new winning line.
-  if (HasExactFive(position, context->attacker) ||
-      HasExactFive(position, context->defender)) {
+  if (HasExactFive(*position, context->attacker) ||
+      HasExactFive(*position, context->defender)) {
     return false;
   }
 
-  const BoardKey key = MakeKey(position);
-  if (context->failed_positions.contains(key)) return false;
+  if (context->failed_positions.contains(context->hash)) return false;
 
   // Prefer an immediate win. This also makes the result stable when several
   // winning moves exist: actions are examined in row-major action order.
   const std::vector<int> immediate_wins =
-      WinningMoves(position, context->attacker);
+      WinningMoves(*position, context->attacker);
   if (!immediate_wins.empty()) {
     line->assign(1, immediate_wins.front());
     return true;
   }
 
+  // An attacker placement can never create a defender winning square and can
+  // only remove one by occupying it, so the defender's winning squares are
+  // computed once per node instead of once per candidate.
+  const std::vector<int> defender_wins =
+      WinningMoves(*position, context->defender);
+
   // Every legal move with a friendly stone within line distance 4 is
   // considered; other moves cannot create a four and the prune is lossless.
   for (int attack_action = 0; attack_action < kVcfNumCells; ++attack_action) {
-    if (!position.IsEmpty(attack_action)) continue;
+    if (!position->IsEmpty(attack_action)) continue;
 
-    const int ax = VcfActionX(attack_action);
-    const int ay = VcfActionY(attack_action);
-    if (!HasStoneWithinLineDistance4(position, ax, ay, context->attacker)) {
+    // If the defender can still win immediately after the attack, the
+    // attacker cannot force this branch: a defender is allowed to ignore a
+    // threat when doing so wins the game.
+    if (defender_wins.size() >= 2 ||
+        (defender_wins.size() == 1 && defender_wins.front() != attack_action)) {
       continue;
     }
 
-    Position after_attack = position;
-    after_attack.Set(attack_action, context->attacker);
+    const int ax = VcfActionX(attack_action);
+    const int ay = VcfActionY(attack_action);
+    if (!HasStoneWithinLineDistance4(*position, ax, ay, context->attacker)) {
+      continue;
+    }
+
+    MakeMove(position, context, attack_action, context->attacker);
 
     // Check newly formed winning moves along lines passing through attack_action.
     const std::vector<int> attacker_wins =
-        FindWinningMovesAround(after_attack, attack_action, context->attacker);
-    if (attacker_wins.empty()) continue;
-
-    // If the defender can win immediately, the attacker cannot force this
-    // branch. Checking this before the threat count is important: a defender
-    // is allowed to ignore a threat when doing so wins the game.
-    if (!WinningMoves(after_attack, context->defender).empty()) continue;
+        FindWinningMovesAround(*position, attack_action, context->attacker);
+    if (attacker_wins.empty()) {
+      UnmakeMove(position, context, attack_action, context->attacker);
+      continue;
+    }
 
     // Two or more winning squares cannot be covered by one defender move.
     if (attacker_wins.size() >= 2) {
+      UnmakeMove(position, context, attack_action, context->attacker);
       line->assign(1, attack_action);
       return true;
     }
 
     // With one winning square, the defender has exactly one relevant reply.
     // Apply it and continue searching for the next forcing attacker move.
-    Position after_defense = after_attack;
     const int defense_action = attacker_wins.front();
-    after_defense.Set(defense_action, context->defender);
+    MakeMove(position, context, defense_action, context->defender);
 
     std::vector<int> continuation;
-    if (!Search(after_defense, context, &continuation)) continue;
+    const bool solved = Search(position, context, &continuation);
+
+    UnmakeMove(position, context, defense_action, context->defender);
+    UnmakeMove(position, context, attack_action, context->attacker);
+    if (!solved) continue;
 
     line->clear();
     line->reserve(2 + continuation.size());
@@ -239,7 +285,7 @@ bool Search(const Position& position, SearchContext* context,
     return true;
   }
 
-  context->failed_positions.insert(key);
+  context->failed_positions.insert(context->hash);
   return false;
 }
 
@@ -293,10 +339,15 @@ std::vector<int> SolveVCF(const Position& position, int max_nodes) {
     return {};
   }
 
-  SearchContext context{
-      position.current_player, OtherStone(position.current_player), max_nodes, 0, {}};
+  SearchContext context{position.current_player,
+                        OtherStone(position.current_player),
+                        max_nodes,
+                        0,
+                        HashPosition(position),
+                        {}};
+  Position scratch = position;
   std::vector<int> line;
-  if (Search(position, &context, &line)) return line;
+  if (Search(&scratch, &context, &line)) return line;
   return {};
 }
 
