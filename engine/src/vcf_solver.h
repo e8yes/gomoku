@@ -60,9 +60,13 @@ std::vector<int> SolveVCF(const ::Board& board,
                           int max_nodes = kDefaultMaxVcfNodes);
 
 // An opponent's forcing VCF can be used to derive a defensive move set. The
-// analysis probes each legal move for the current player, then asks whether
-// the opponent has a VCF from the resulting position. It is conservative: a
-// safe action is only known to avoid a VCF, not to win the game.
+// analysis probes candidate moves that interact with the discovered threat
+// line (the line itself, its collinear neighborhoods, winning squares,
+// immediate wins, and counter-fours), then asks whether the opponent has a
+// VCF from the resulting position. It is conservative in both directions: a
+// safe action is only known to avoid a VCF, not to win the game, and
+// safe_actions may omit safe moves outside the candidate set (e.g. moves
+// that only become a counter-four after a forced blocking reply).
 EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position,
                                          int max_nodes = kDefaultMaxVcfNodes);
 EndgameDefenseAnalysis AnalyzeVCFDefense(const ::Board& board,

@@ -1,6 +1,7 @@
 #include "vcf_solver.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <unordered_set>
 
@@ -149,6 +150,23 @@ std::vector<int> FindWinningMovesAround(const Position& position,
   return winning_moves;
 }
 
+// A move can only complete or create a five if a friendly stone lies within
+// offset 4 along one of the 4 lines through it — exactly the region
+// FindWinningMovesAround inspects — so this prune is lossless, including for
+// gapped formations such as XXX_X.
+bool HasStoneWithinLineDistance4(const Position& position, int x, int y,
+                                 Stone stone) {
+  for (const auto& direction : kDirections) {
+    const int dx = direction[0];
+    const int dy = direction[1];
+    for (int k = -4; k <= 4; ++k) {
+      if (k == 0) continue;
+      if (position.At(x + k * dx, y + k * dy) == stone) return true;
+    }
+  }
+  return false;
+}
+
 bool Search(const Position& position, SearchContext* context,
             std::vector<int>* line) {
   if (++context->visited_nodes > context->max_nodes) {
@@ -174,9 +192,16 @@ bool Search(const Position& position, SearchContext* context,
     return true;
   }
 
-  // Every legal move is considered.
+  // Every legal move with a friendly stone within line distance 4 is
+  // considered; other moves cannot create a four and the prune is lossless.
   for (int attack_action = 0; attack_action < kVcfNumCells; ++attack_action) {
     if (!position.IsEmpty(attack_action)) continue;
+
+    const int ax = VcfActionX(attack_action);
+    const int ay = VcfActionY(attack_action);
+    if (!HasStoneWithinLineDistance4(position, ax, ay, context->attacker)) {
+      continue;
+    }
 
     Position after_attack = position;
     after_attack.Set(attack_action, context->attacker);
@@ -306,10 +331,10 @@ EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position, int max_nodes
   // Targeted defense: only test actions that intersect the discovered threat line,
   // its winning squares, its collinear line segments, immediate wins, or counter-fours.
   std::vector<int> candidate_actions;
+  std::array<bool, kVcfNumCells> is_candidate{};
   auto add_candidate = [&](int act) {
-    if (position.IsEmpty(act) &&
-        std::find(candidate_actions.begin(), candidate_actions.end(), act) ==
-            candidate_actions.end()) {
+    if (position.IsEmpty(act) && !is_candidate[act]) {
+      is_candidate[act] = true;
       candidate_actions.push_back(act);
     }
   };
@@ -348,11 +373,11 @@ EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position, int max_nodes
   for (int act : defender_wins) add_candidate(act);
 
   for (int action = 0; action < kVcfNumCells; ++action) {
-    if (!position.IsEmpty(action)) continue;
-    if (std::find(candidate_actions.begin(), candidate_actions.end(), action) !=
-        candidate_actions.end()) {
-      continue;
-    }
+    if (!position.IsEmpty(action) || is_candidate[action]) continue;
+
+    const int ax = VcfActionX(action);
+    const int ay = VcfActionY(action);
+    if (!HasStoneWithinLineDistance4(position, ax, ay, defender)) continue;
 
     Position after_counter = position;
     after_counter.Set(action, defender);
