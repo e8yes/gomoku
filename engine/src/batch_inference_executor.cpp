@@ -11,12 +11,15 @@ namespace {
 std::vector<BatchInferenceExecutor::Output> RunBatch(
     torch::inductor::AOTIModelPackageLoader& model, torch::Device device,
     const std::vector<torch::Tensor>& inputs) {
+  if (inputs.empty()) return {};
+
   // Concatenate small-batch CPU float32 board tensors → [N_total, C, H, W],
   // move to GPU. Cast to FP16: the 4060 Ti has a 128-bit memory bus (288 GB/s),
   // making inference memory-bandwidth-bound. FP16 halves weight traffic per
   // forward pass and engages the tensor cores, roughly doubling throughput.
-  torch::Tensor batch =
-      torch::cat(inputs, /*dim=*/0).to(device).to(torch::kFloat16);
+  torch::Tensor batch = (inputs.size() == 1 ? inputs[0] : torch::cat(inputs, /*dim=*/0))
+                            .to(device)
+                            .to(torch::kFloat16);
 
   // AOTIModelPackageLoader::run returns the model's output tensors directly.
   // The exported model returns policy logits followed by the value tensor.
@@ -27,7 +30,7 @@ std::vector<BatchInferenceExecutor::Output> RunBatch(
   }
 
   // Convert FP16 outputs back to FP32 on CPU so downstream consumers
-  // (NeuralNetEvaluator::DecodeOutput) can use float accessors unchanged.
+  // can use float data pointers directly.
   torch::Tensor policy = outputs[0].to(torch::kFloat32).cpu();  // [N_total, A]
   torch::Tensor values = outputs[1].to(torch::kFloat32).cpu();  // [N_total, 1]
 
@@ -35,12 +38,16 @@ std::vector<BatchInferenceExecutor::Output> RunBatch(
   std::vector<BatchInferenceExecutor::Output> results;
   results.reserve(N);
 
-  int offset = 0;
-  for (int i = 0; i < N; ++i) {
-    int N_i = inputs[i].size(0);
-    results.emplace_back(policy.slice(0, offset, offset + N_i).clone(),
-                         values.slice(0, offset, offset + N_i).clone());
-    offset += N_i;
+  if (N == 1) {
+    results.emplace_back(std::move(policy), std::move(values));
+  } else {
+    int offset = 0;
+    for (int i = 0; i < N; ++i) {
+      const int N_i = static_cast<int>(inputs[i].size(0));
+      results.emplace_back(policy.slice(0, offset, offset + N_i),
+                           values.slice(0, offset, offset + N_i));
+      offset += N_i;
+    }
   }
   return results;
 }
