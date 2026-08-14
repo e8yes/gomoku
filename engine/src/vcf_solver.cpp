@@ -1,5 +1,6 @@
 #include "vcf_solver.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <unordered_set>
 
@@ -49,6 +50,8 @@ struct BoardKeyHash {
 struct SearchContext {
   Stone attacker;
   Stone defender;
+  int max_nodes = kDefaultMaxVcfNodes;
+  int visited_nodes = 0;
   std::unordered_set<BoardKey, BoardKeyHash> failed_positions;
 };
 
@@ -115,8 +118,57 @@ std::vector<int> WinningMoves(const Position& position, Stone stone) {
   return winning_moves;
 }
 
+// Finds winning squares for `stone` that pass through `placed_action`.
+// When `placed_action` is played, any newly created four-threat must be
+// collinear with `placed_action` along one of the 4 directions within distance 4.
+std::vector<int> FindWinningMovesAround(const Position& position,
+                                       int placed_action, Stone stone) {
+  std::vector<int> winning_moves;
+  const int px = VcfActionX(placed_action);
+  const int py = VcfActionY(placed_action);
+
+  for (const auto& direction : kDirections) {
+    const int dx = direction[0];
+    const int dy = direction[1];
+
+    for (int k = -4; k <= 4; ++k) {
+      if (k == 0) continue;
+      const int x = px + k * dx;
+      const int y = py + k * dy;
+      if (!IsInside(x, y)) continue;
+
+      const int action = VcfActionFromXY(x, y);
+      if (position.IsEmpty(action) && MakesExactFive(position, action, stone)) {
+        if (std::find(winning_moves.begin(), winning_moves.end(), action) ==
+            winning_moves.end()) {
+          winning_moves.push_back(action);
+        }
+      }
+    }
+  }
+  return winning_moves;
+}
+
+bool HasFriendlyStoneNearby(const Position& position, int x, int y,
+                            Stone stone) {
+  for (const auto& direction : kDirections) {
+    const int dx = direction[0];
+    const int dy = direction[1];
+    if (CountInDirection(position, x, y, dx, dy, stone) +
+            CountInDirection(position, x, y, -dx, -dy, stone) >=
+        1) {
+      return true;
+    }
+  }
+  return false;
+}
+
 bool Search(const Position& position, SearchContext* context,
             std::vector<int>* line) {
+  if (++context->visited_nodes > context->max_nodes) {
+    return false;
+  }
+
   // A VCF is a forcing continuation from a live position. A position that
   // already contains a five has already ended and is not a new winning line.
   if (HasExactFive(position, context->attacker) ||
@@ -136,17 +188,22 @@ bool Search(const Position& position, SearchContext* context,
     return true;
   }
 
-  // Every legal move is considered. A move is retained only when it creates
-  // at least one immediate winning square for the attacker, which is exactly
-  // the forcing-move restriction of a VCF search.
+  // Every legal move that has a friendly stone nearby is considered.
   for (int attack_action = 0; attack_action < kVcfNumCells; ++attack_action) {
     if (!position.IsEmpty(attack_action)) continue;
+
+    const int ax = VcfActionX(attack_action);
+    const int ay = VcfActionY(attack_action);
+    if (!HasFriendlyStoneNearby(position, ax, ay, context->attacker)) {
+      continue;
+    }
 
     Position after_attack = position;
     after_attack.Set(attack_action, context->attacker);
 
+    // Check newly formed winning moves along lines passing through attack_action.
     const std::vector<int> attacker_wins =
-        WinningMoves(after_attack, context->attacker);
+        FindWinningMovesAround(after_attack, attack_action, context->attacker);
     if (attacker_wins.empty()) continue;
 
     // If the defender can win immediately, the attacker cannot force this
@@ -225,26 +282,26 @@ bool Position::IsEmpty(int action) const {
   return action >= 0 && action < kVcfNumCells && cells[action] == Stone::kEmpty;
 }
 
-std::vector<int> SolveVCF(const Position& position) {
+std::vector<int> SolveVCF(const Position& position, int max_nodes) {
   if (position.current_player != Stone::kBlack &&
       position.current_player != Stone::kWhite) {
     return {};
   }
 
   SearchContext context{
-      position.current_player, OtherStone(position.current_player), {}};
+      position.current_player, OtherStone(position.current_player), max_nodes, 0, {}};
   std::vector<int> line;
   if (Search(position, &context, &line)) return line;
   return {};
 }
 
-std::vector<int> SolveVCF(const ::Board& board) {
+std::vector<int> SolveVCF(const ::Board& board, int max_nodes) {
   if (board.phase() != Phase::kStandard || board.IsTerminal()) return {};
 
-  return SolveVCF(MakeVcfPosition(board));
+  return SolveVCF(MakeVcfPosition(board), max_nodes);
 }
 
-EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position) {
+EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position, int max_nodes) {
   if (position.current_player != Stone::kBlack &&
       position.current_player != Stone::kWhite) {
     return {};
@@ -261,13 +318,73 @@ EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position) {
   // positions.
   Position attacker_to_move = position;
   attacker_to_move.current_player = attacker;
-  if (SolveVCF(attacker_to_move).empty()) return analysis;
+  const std::vector<int> threat_line = SolveVCF(attacker_to_move, max_nodes);
+  if (threat_line.empty()) return analysis;
 
   analysis.threat_detected = true;
 
+  // Targeted defense: only test actions that intersect the discovered threat line,
+  // its winning squares, its collinear line segments, immediate wins, or counter-fours.
+  std::vector<int> candidate_actions;
+  auto add_candidate = [&](int act) {
+    if (position.IsEmpty(act) &&
+        std::find(candidate_actions.begin(), candidate_actions.end(), act) ==
+            candidate_actions.end()) {
+      candidate_actions.push_back(act);
+    }
+  };
+
+  Position replay = position;
+  for (size_t i = 0; i < threat_line.size(); ++i) {
+    const int act = threat_line[i];
+    add_candidate(act);
+
+    const bool is_attacker_ply = (i % 2 == 0);
+    const Stone stone = is_attacker_ply ? attacker : defender;
+    replay.Set(act, stone);
+
+    if (is_attacker_ply) {
+      const auto wins = FindWinningMovesAround(replay, act, attacker);
+      for (int w : wins) add_candidate(w);
+
+      const int ax = VcfActionX(act);
+      const int ay = VcfActionY(act);
+      for (const auto& direction : kDirections) {
+        const int dx = direction[0];
+        const int dy = direction[1];
+        for (int k = -4; k <= 4; ++k) {
+          if (k == 0) continue;
+          const int x = ax + k * dx;
+          const int y = ay + k * dy;
+          if (IsInside(x, y)) {
+            add_candidate(VcfActionFromXY(x, y));
+          }
+        }
+      }
+    }
+  }
+
+  const std::vector<int> defender_wins = WinningMoves(position, defender);
+  for (int act : defender_wins) add_candidate(act);
+
   for (int action = 0; action < kVcfNumCells; ++action) {
     if (!position.IsEmpty(action)) continue;
+    if (std::find(candidate_actions.begin(), candidate_actions.end(), action) !=
+        candidate_actions.end()) {
+      continue;
+    }
+    const int ax = VcfActionX(action);
+    const int ay = VcfActionY(action);
+    if (!HasFriendlyStoneNearby(position, ax, ay, defender)) continue;
 
+    Position after_counter = position;
+    after_counter.Set(action, defender);
+    if (!FindWinningMovesAround(after_counter, action, defender).empty()) {
+      add_candidate(action);
+    }
+  }
+
+  for (int action : candidate_actions) {
     Position after_defense = position;
     after_defense.Set(action, defender);
     after_defense.current_player = attacker;
@@ -275,18 +392,19 @@ EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position) {
     // A non-empty line means the candidate move allows the opponent to force
     // a VCF. A terminal win for the defender naturally returns an empty line
     // from SolveVCF and is therefore safe.
-    if (SolveVCF(after_defense).empty()) {
+    if (SolveVCF(after_defense, max_nodes).empty()) {
       analysis.safe_actions.push_back(action);
     }
   }
 
+  std::sort(analysis.safe_actions.begin(), analysis.safe_actions.end());
   return analysis;
 }
 
-EndgameDefenseAnalysis AnalyzeVCFDefense(const ::Board& board) {
+EndgameDefenseAnalysis AnalyzeVCFDefense(const ::Board& board, int max_nodes) {
   if (board.phase() != Phase::kStandard || board.IsTerminal()) return {};
 
   const Position position = MakeVcfPosition(board);
   if (position.current_player == Stone::kEmpty) return {};
-  return AnalyzeVCFDefense(position);
+  return AnalyzeVCFDefense(position, max_nodes);
 }

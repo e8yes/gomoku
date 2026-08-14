@@ -45,18 +45,25 @@ struct Position {
   Stone current_player;
 };
 
+constexpr int kDefaultMaxVcfNodes = 1000;
+
 // Returns a deterministic, first-found winning VCF line for
-// position.current_player. The line contains alternating attacker and
-// forced-defender placements. An empty line means that no VCF was found.
-std::vector<int> SolveVCF(const Position& position);
+// position.current_player within max_nodes search budget. The line contains
+// alternating attacker and forced-defender placements. An empty line means
+// that no VCF was found within budget.
+std::vector<int> SolveVCF(const Position& position,
+                          int max_nodes = kDefaultMaxVcfNodes);
 
 // Adapter for the production board. VCF is defined for standard play only;
 // Swap2 control phases and terminal boards return an empty line.
-std::vector<int> SolveVCF(const ::Board& board);
+std::vector<int> SolveVCF(const ::Board& board,
+                          int max_nodes = kDefaultMaxVcfNodes);
 
 // An opponent's forcing VCF can be used to derive a defensive move set. The
 // analysis probes each legal move for the current player, then asks whether
 // the opponent has a VCF from the resulting position. It is conservative: a
 // safe action is only known to avoid a VCF, not to win the game.
-EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position);
-EndgameDefenseAnalysis AnalyzeVCFDefense(const ::Board& board);
+EndgameDefenseAnalysis AnalyzeVCFDefense(const Position& position,
+                                         int max_nodes = kDefaultMaxVcfNodes);
+EndgameDefenseAnalysis AnalyzeVCFDefense(const ::Board& board,
+                                         int max_nodes = kDefaultMaxVcfNodes);
