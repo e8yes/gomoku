@@ -80,6 +80,8 @@ class Board {
 
   // Get current seat to move.
   Seat current_player() const { return current_player_; }
+  // Returns the seat to move after applying action_id, in O(1) without copying.
+  Seat GetChildCurrentPlayer(int action_id) const;
   Player stone_to_place() const { return stone_to_place_; }
   Phase phase() const { return phase_; }
   Result result() const { return result_; }

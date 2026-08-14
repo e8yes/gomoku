@@ -195,3 +195,72 @@ TEST(BoardTest, ZobristCollisions) {
 
   EXPECT_NE(board1.signature(), board2.signature());
 }
+
+TEST(BoardTest, GetChildCurrentPlayerMatchesApply) {
+  auto verify_legal_moves = [](const Board& b) {
+    for (int action : b.GetLegalActions()) {
+      Board child = b;
+      child.Apply(action);
+      EXPECT_EQ(b.GetChildCurrentPlayer(action), child.current_player())
+          << "Mismatch at phase " << static_cast<int>(b.phase())
+          << " action " << Action(action).ToString();
+    }
+  };
+
+  // Phase 1: kPlaceInitialThree
+  Board b1;
+  verify_legal_moves(b1);
+  b1.Apply(Action::FromXY(7, 7).id);
+  verify_legal_moves(b1);
+  b1.Apply(Action::FromXY(8, 8).id);
+  verify_legal_moves(b1);
+  b1.Apply(Action::FromXY(6, 6).id);
+
+  // Phase 2: kSwap2Decision
+  EXPECT_EQ(b1.phase(), Phase::kSwap2Decision);
+  verify_legal_moves(b1);
+
+  // Branch A: Swap2 Choose White
+  {
+    Board b = b1;
+    b.Apply(Action::kSwap2ChooseWhite);
+    EXPECT_EQ(b.phase(), Phase::kStandard);
+    verify_legal_moves(b);
+  }
+
+  // Branch B: Swap2 Choose Black
+  {
+    Board b = b1;
+    b.Apply(Action::kSwap2ChooseBlack);
+    EXPECT_EQ(b.phase(), Phase::kStandard);
+    verify_legal_moves(b);
+  }
+
+  // Branch C: Swap2 Place Two
+  {
+    Board b = b1;
+    b.Apply(Action::kSwap2PlaceTwo);
+    EXPECT_EQ(b.phase(), Phase::kSwap2PlaceTwo);
+    verify_legal_moves(b);
+
+    b.Apply(Action::FromXY(5, 5).id);
+    verify_legal_moves(b);
+
+    b.Apply(Action::FromXY(9, 9).id);
+    EXPECT_EQ(b.phase(), Phase::kChooseColor);
+    verify_legal_moves(b);
+
+    // Choose White
+    Board b_cw = b;
+    b_cw.Apply(Action::kChooseWhite);
+    EXPECT_EQ(b_cw.phase(), Phase::kStandard);
+    verify_legal_moves(b_cw);
+
+    // Choose Black
+    Board b_cb = b;
+    b_cb.Apply(Action::kChooseBlack);
+    EXPECT_EQ(b_cb.phase(), Phase::kStandard);
+    verify_legal_moves(b_cb);
+  }
+}
+

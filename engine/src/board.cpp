@@ -245,6 +245,35 @@ void Board::Apply(int action_id) {
   ToggleHash(a.id);
 }
 
+Seat Board::GetChildCurrentPlayer(int action_id) const {
+  if (phase_ == Phase::kStandard) {
+    return (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+  }
+
+  if (phase_ == Phase::kPlaceInitialThree) {
+    return (move_count_ == 2) ? Seat::kB : Seat::kA;
+  }
+
+  if (phase_ == Phase::kSwap2Decision) {
+    if (action_id == Action::kSwap2ChooseWhite ||
+        action_id == Action::kSwap2PlaceTwo) {
+      return Seat::kB;
+    }
+    return Seat::kA;  // kSwap2ChooseBlack
+  }
+
+  if (phase_ == Phase::kSwap2PlaceTwo) {
+    return (move_count_ == 4) ? Seat::kA : Seat::kB;
+  }
+
+  if (phase_ == Phase::kChooseColor) {
+    if (action_id == Action::kChooseWhite) return Seat::kA;
+    return Seat::kB;  // kChooseBlack
+  }
+
+  return (current_player_ == Seat::kA) ? Seat::kB : Seat::kA;
+}
+
 void Board::TransitionPhase() {
   if (phase_ == Phase::kPlaceInitialThree) {
     if (move_count_ == 1) {

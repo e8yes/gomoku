@@ -184,12 +184,22 @@ MCTSNode::~MCTSNode() {}
 void MCTSNode::Expand(const Board& board, const std::vector<float>& move_pmf) {
   if (is_expanded_) return;
 
-  auto legal_actions = board.GetLegalActions();
-  for (int action : legal_actions) {
-    Board child_board = board;
-    child_board.Apply(action);
-    children_.push_back(std::make_unique<MCTSNode>(
-        action, move_pmf[action], child_board.current_player()));
+  const auto legal_actions = board.GetLegalActions();
+  children_.reserve(legal_actions.size());
+
+  if (board.phase() == Phase::kStandard) {
+    const Seat next_player =
+        (board.current_player() == Seat::kA) ? Seat::kB : Seat::kA;
+    for (int action : legal_actions) {
+      children_.push_back(
+          std::make_unique<MCTSNode>(action, move_pmf[action], next_player));
+    }
+  } else {
+    for (int action : legal_actions) {
+      const Seat next_player = board.GetChildCurrentPlayer(action);
+      children_.push_back(
+          std::make_unique<MCTSNode>(action, move_pmf[action], next_player));
+    }
   }
 
   is_expanded_ = true;
