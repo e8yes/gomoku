@@ -180,6 +180,53 @@ std::vector<int> FindWinningMovesAround(const Position& position,
   return winning_moves;
 }
 
+// Threat discovery for the Search hot path. Search only calls this right
+// after placing `placed_action` in a position that had no attacker win, so
+// every new winning square must lie on a line through `placed_action` and the
+// completed five must include it. Counting along that single direction (and
+// requiring the five to contain the placed stone) is therefore lossless and
+// avoids the full 4-direction MakesExactFive per scanned cell.
+std::vector<int> FindCreatedWinningMoves(const Position& position,
+                                         int placed_action, Stone stone) {
+  std::vector<int> winning_moves;
+  const int px = VcfActionX(placed_action);
+  const int py = VcfActionY(placed_action);
+
+  for (const auto& direction : kDirections) {
+    const int dx = direction[0];
+    const int dy = direction[1];
+
+    for (int k = -4; k <= 4; ++k) {
+      if (k == 0) continue;
+      const int x = px + k * dx;
+      const int y = py + k * dy;
+      if (!IsInside(x, y)) continue;
+
+      const int action = VcfActionFromXY(x, y);
+      if (!position.IsEmpty(action)) continue;
+
+      const int negative = CountInDirection(position, x, y, -dx, -dy, stone);
+      const int positive = CountInDirection(position, x, y, dx, dy, stone);
+      if (1 + negative + positive != 5) continue;
+
+      bool includes_placed = false;
+      for (int offset = -negative; offset <= positive; ++offset) {
+        if (x + offset * dx == px && y + offset * dy == py) {
+          includes_placed = true;
+          break;
+        }
+      }
+      if (!includes_placed) continue;
+
+      if (std::find(winning_moves.begin(), winning_moves.end(), action) ==
+          winning_moves.end()) {
+        winning_moves.push_back(action);
+      }
+    }
+  }
+  return winning_moves;
+}
+
 // A move can only complete or create a five if a friendly stone lies within
 // offset 4 along one of the 4 lines through it — exactly the region
 // FindWinningMovesAround inspects — so this prune is lossless, including for
@@ -202,13 +249,6 @@ bool HasStoneWithinLineDistance4(const Position& position, int x, int y,
 bool Search(Position* position, SearchContext* context,
             std::vector<int>* line) {
   if (++context->visited_nodes > context->max_nodes) {
-    return false;
-  }
-
-  // A VCF is a forcing continuation from a live position. A position that
-  // already contains a five has already ended and is not a new winning line.
-  if (HasExactFive(*position, context->attacker) ||
-      HasExactFive(*position, context->defender)) {
     return false;
   }
 
@@ -252,7 +292,7 @@ bool Search(Position* position, SearchContext* context,
 
     // Check newly formed winning moves along lines passing through attack_action.
     const std::vector<int> attacker_wins =
-        FindWinningMovesAround(*position, attack_action, context->attacker);
+        FindCreatedWinningMoves(*position, attack_action, context->attacker);
     if (attacker_wins.empty()) {
       UnmakeMove(position, context, attack_action, context->attacker);
       continue;
@@ -336,6 +376,16 @@ bool Position::IsEmpty(int action) const {
 std::vector<int> SolveVCF(const Position& position, int max_nodes) {
   if (position.current_player != Stone::kBlack &&
       position.current_player != Stone::kWhite) {
+    return {};
+  }
+
+  // A VCF is a forcing continuation from a live position. A position that
+  // already contains a five has already ended and is not a new winning line.
+  // A five can never appear mid-search — attacker wins are returned before
+  // being placed and the forced defense occupies the only winning square —
+  // so checking once at the root suffices.
+  if (HasExactFive(position, Stone::kBlack) ||
+      HasExactFive(position, Stone::kWhite)) {
     return {};
   }
 
