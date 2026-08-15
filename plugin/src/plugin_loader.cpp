@@ -19,7 +19,8 @@ void* OpenSharedLibrary(const std::filesystem::path& path) {
   HMODULE handle = LoadLibraryW(abs_path.wstring().c_str());
   if (!handle) {
     throw std::runtime_error("Failed to load DLL: " + abs_path.string() +
-                             " (Error code: " + std::to_string(GetLastError()) + ")");
+                             " (Error code: " + std::to_string(GetLastError()) +
+                             ")");
   }
   return reinterpret_cast<void*>(handle);
 #else
@@ -27,8 +28,9 @@ void* OpenSharedLibrary(const std::filesystem::path& path) {
   void* handle = dlopen(abs_path.c_str(), RTLD_NOW | RTLD_LOCAL);
   if (!handle) {
     const char* err = dlerror();
-    throw std::runtime_error("Failed to load plugin library: " + abs_path.string() +
-                             " (Error: " + (err ? err : "unknown") + ")");
+    throw std::runtime_error(
+        "Failed to load plugin library: " + abs_path.string() +
+        " (Error: " + (err ? err : "unknown") + ")");
   }
   return handle;
 #endif
@@ -60,8 +62,9 @@ class PluginPlayerAdapter : public IPlayer {
                       GomokuPlayerHandle handle)
       : plugin_(std::move(plugin)), handle_(handle) {
     if (!handle_) {
-      throw std::runtime_error("Failed to create player instance from plugin: " +
-                               plugin_->GetName());
+      throw std::runtime_error(
+          "Failed to create player instance from plugin: " +
+          plugin_->GetName());
     }
   }
 
@@ -187,7 +190,8 @@ std::shared_ptr<LoadedPlugin> EnginePluginLoader::LoadPlugin(
     const std::filesystem::path& plugin_path) {
   void* handle = OpenSharedLibrary(plugin_path);
 
-  auto plugin = std::shared_ptr<LoadedPlugin>(new LoadedPlugin(handle, plugin_path));
+  auto plugin =
+      std::shared_ptr<LoadedPlugin>(new LoadedPlugin(handle, plugin_path));
 
   // Resolve required C ABI symbols
   plugin->get_info_fn_ = reinterpret_cast<LoadedPlugin::GetInfoFn>(

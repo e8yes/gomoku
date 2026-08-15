@@ -39,9 +39,8 @@ TEST_F(MatchCoordinatorTest, PlayerVsPlayerStepByStep) {
   EXPECT_FALSE(coordinator.IsFinished());
 
   // Step 1: Alice moves
-  auto future_step1 = std::async(std::launch::async, [&]() {
-    return coordinator.Step();
-  });
+  auto future_step1 =
+      std::async(std::launch::async, [&]() { return coordinator.Step(); });
   while (!player_a.IsWaitingForAction()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
@@ -50,9 +49,8 @@ TEST_F(MatchCoordinatorTest, PlayerVsPlayerStepByStep) {
   EXPECT_EQ(coordinator.GetBoardState().cell(7, 7), Stone::kBlack);
 
   // Step 2: Alice moves second stone in Swap2
-  auto future_step2 = std::async(std::launch::async, [&]() {
-    return coordinator.Step();
-  });
+  auto future_step2 =
+      std::async(std::launch::async, [&]() { return coordinator.Step(); });
   while (!player_a.IsWaitingForAction()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
@@ -75,9 +73,8 @@ TEST_F(MatchCoordinatorTest, EngineVsEngineFullMatch) {
   int step_count = 0;
   auto result = coordinator.PlayMatch(
       engine_a.get(), engine_b.get(), Difficulty::kCasual, Difficulty::kClub,
-      [&](const BoardState& /*state*/, int /*last_action*/, IPlayer* /*moving_player*/) {
-        ++step_count;
-      });
+      [&](const BoardState& /*state*/, int /*last_action*/,
+          IPlayer* /*moving_player*/) { ++step_count; });
 
   EXPECT_GT(step_count, 0);
   EXPECT_TRUE(coordinator.IsFinished());
@@ -95,10 +92,12 @@ TEST_F(MatchCoordinatorTest, PlayerVsEngineFullMatch) {
   auto engine = plugin->CreatePlayer();
 
   MatchCoordinator coordinator;
-  coordinator.StartMatch(&human, engine.get(), Difficulty::kCasual, Difficulty::kVeteran);
+  coordinator.StartMatch(&human, engine.get(), Difficulty::kCasual,
+                         Difficulty::kVeteran);
 
   // Move 1: Human places stone at (7, 7)
-  auto f1 = std::async(std::launch::async, [&]() { return coordinator.Step(); });
+  auto f1 =
+      std::async(std::launch::async, [&]() { return coordinator.Step(); });
   while (!human.IsWaitingForAction()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
@@ -106,7 +105,8 @@ TEST_F(MatchCoordinatorTest, PlayerVsEngineFullMatch) {
   f1.get();
 
   // Move 2: Human places stone at (7, 8)
-  auto f2 = std::async(std::launch::async, [&]() { return coordinator.Step(); });
+  auto f2 =
+      std::async(std::launch::async, [&]() { return coordinator.Step(); });
   while (!human.IsWaitingForAction()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
@@ -114,7 +114,8 @@ TEST_F(MatchCoordinatorTest, PlayerVsEngineFullMatch) {
   f2.get();
 
   // Move 3: Human places stone at (8, 8)
-  auto f3 = std::async(std::launch::async, [&]() { return coordinator.Step(); });
+  auto f3 =
+      std::async(std::launch::async, [&]() { return coordinator.Step(); });
   while (!human.IsWaitingForAction()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }

@@ -1,6 +1,4 @@
 #define GOMOKU_PLUGIN_EXPORTS
-#include "plugin/plugin_api.h"
-
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -14,6 +12,7 @@
 #include <vector>
 
 #include "plugin/gomoku_types.h"
+#include "plugin/plugin_api.h"
 
 namespace {
 
@@ -51,8 +50,9 @@ class SampleEngine {
 
     // Opening Swap2 actions
     if (board.phase == GamePhase::kSwap2Decision) {
-      UpdateTelemetry(0.52f, {Swap2Action::kChooseWhite, Swap2Action::kChooseBlack,
-                              Swap2Action::kPlaceTwo});
+      UpdateTelemetry(0.52f,
+                      {Swap2Action::kChooseWhite, Swap2Action::kChooseBlack,
+                       Swap2Action::kPlaceTwo});
       return Swap2Action::kChooseWhite;
     }
     if (board.phase == GamePhase::kChooseColor) {
@@ -116,7 +116,7 @@ class SampleEngine {
       }
       board.SetCell(x, y, opp_stone);
       if (CheckWin(board, x, y, opp_stone)) {
-        score += 50000.0f;   // Block opponent win
+        score += 50000.0f;  // Block opponent win
       }
       board.SetCell(x, y, Stone::kEmpty);
 
@@ -130,7 +130,8 @@ class SampleEngine {
       }
 
       // Update in-flight telemetry during search iterations
-      float current_wr = 0.5f + std::clamp(best_score / 200000.0f, -0.49f, 0.49f);
+      float current_wr =
+          0.5f + std::clamp(best_score / 200000.0f, -0.49f, 0.49f);
       UpdateTelemetryFromScores(current_wr, legal_actions, scores);
     }
 
@@ -160,9 +161,7 @@ class SampleEngine {
     return count;
   }
 
-  void CancelInquiry() {
-    cancelled_.store(true, std::memory_order_relaxed);
-  }
+  void CancelInquiry() { cancelled_.store(true, std::memory_order_relaxed); }
 
  private:
   bool CheckWin(const BoardState& board, int x, int y, Stone s) const {
@@ -214,7 +213,8 @@ class SampleEngine {
     float sum_exp = 0.0f;
     std::vector<float> exps(scores.size(), 0.0f);
     for (size_t i = 0; i < scores.size(); ++i) {
-      exps[i] = std::exp(std::clamp((scores[i] - max_s) / 100.0f, -20.0f, 0.0f));
+      exps[i] =
+          std::exp(std::clamp((scores[i] - max_s) / 100.0f, -20.0f, 0.0f));
       sum_exp += exps[i];
     }
     if (sum_exp > 0.0f) {
@@ -252,7 +252,8 @@ GOMOKU_PLUGIN_API GomokuPluginInfo gomoku_plugin_get_info(void) {
   return info;
 }
 
-GOMOKU_PLUGIN_API GomokuPlayerHandle gomoku_player_create(const char* /*config_json*/) {
+GOMOKU_PLUGIN_API GomokuPlayerHandle
+gomoku_player_create(const char* /*config_json*/) {
   return reinterpret_cast<GomokuPlayerHandle>(new SampleEngine());
 }
 
@@ -267,19 +268,18 @@ GOMOKU_PLUGIN_API void gomoku_player_on_match_start(
   }
 }
 
-GOMOKU_PLUGIN_API int gomoku_player_inquire_action(
-    GomokuPlayerHandle handle,
-    const uint8_t* board_cells,
-    int current_seat,
-    int stone_to_place,
-    int phase) {
+GOMOKU_PLUGIN_API int gomoku_player_inquire_action(GomokuPlayerHandle handle,
+                                                   const uint8_t* board_cells,
+                                                   int current_seat,
+                                                   int stone_to_place,
+                                                   int phase) {
   if (!handle || !board_cells) return -1;
   return reinterpret_cast<SampleEngine*>(handle)->InquireAction(
       board_cells, current_seat, stone_to_place, phase);
 }
 
-GOMOKU_PLUGIN_API void gomoku_player_apply_action(
-    GomokuPlayerHandle handle, int action_id) {
+GOMOKU_PLUGIN_API void gomoku_player_apply_action(GomokuPlayerHandle handle,
+                                                  int action_id) {
   if (handle) {
     reinterpret_cast<SampleEngine*>(handle)->ApplyAction(action_id);
   }
@@ -292,16 +292,19 @@ GOMOKU_PLUGIN_API void gomoku_player_on_match_end(
   }
 }
 
-GOMOKU_PLUGIN_API int gomoku_player_get_win_rate(
-    GomokuPlayerHandle handle, float* out_win_rate) {
+GOMOKU_PLUGIN_API int gomoku_player_get_win_rate(GomokuPlayerHandle handle,
+                                                 float* out_win_rate) {
   if (!handle) return 0;
-  return reinterpret_cast<SampleEngine*>(handle)->GetWinRate(out_win_rate) ? 1 : 0;
+  return reinterpret_cast<SampleEngine*>(handle)->GetWinRate(out_win_rate) ? 1
+                                                                           : 0;
 }
 
-GOMOKU_PLUGIN_API int gomoku_player_get_policy(
-    GomokuPlayerHandle handle, float* out_policy, int max_actions) {
+GOMOKU_PLUGIN_API int gomoku_player_get_policy(GomokuPlayerHandle handle,
+                                               float* out_policy,
+                                               int max_actions) {
   if (!handle) return 0;
-  return reinterpret_cast<SampleEngine*>(handle)->GetPolicy(out_policy, max_actions);
+  return reinterpret_cast<SampleEngine*>(handle)->GetPolicy(out_policy,
+                                                            max_actions);
 }
 
 GOMOKU_PLUGIN_API void gomoku_player_cancel_inquiry(GomokuPlayerHandle handle) {

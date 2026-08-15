@@ -5,13 +5,13 @@
 #include <stdint.h>
 
 #ifdef _WIN32
-  #ifdef GOMOKU_PLUGIN_EXPORTS
-    #define GOMOKU_PLUGIN_API __declspec(dllexport)
-  #else
-    #define GOMOKU_PLUGIN_API __declspec(dllimport)
-  #endif
+#ifdef GOMOKU_PLUGIN_EXPORTS
+#define GOMOKU_PLUGIN_API __declspec(dllexport)
 #else
-  #define GOMOKU_PLUGIN_API __attribute__((visibility("default")))
+#define GOMOKU_PLUGIN_API __declspec(dllimport)
+#endif
+#else
+#define GOMOKU_PLUGIN_API __attribute__((visibility("default")))
 #endif
 
 #define GOMOKU_PLUGIN_API_VERSION_MAJOR 1
@@ -59,7 +59,8 @@ typedef struct {
 GOMOKU_PLUGIN_API GomokuPluginInfo gomoku_plugin_get_info(void);
 
 // Create and destroy engine player instances
-GOMOKU_PLUGIN_API GomokuPlayerHandle gomoku_player_create(const char* config_json);
+GOMOKU_PLUGIN_API GomokuPlayerHandle
+gomoku_player_create(const char* config_json);
 GOMOKU_PLUGIN_API void gomoku_player_destroy(GomokuPlayerHandle handle);
 
 // Match lifecycle: match start
@@ -70,18 +71,17 @@ GOMOKU_PLUGIN_API void gomoku_player_on_match_start(
 // board_cells: pointer to 225 uint8_t array (0=Empty, 1=Black, 2=White)
 // current_seat: 0=Seat A, 1=Seat B
 // stone_to_place: 0=Empty, 1=Black, 2=White
-// phase: 0=PlaceInitialThree, 1=Swap2Decision, 2=Swap2PlaceTwo, 3=ChooseColor, 4=Standard
-// Returns chosen action ID (0-224 placement, 225-229 Swap2 choice)
-GOMOKU_PLUGIN_API int gomoku_player_inquire_action(
-    GomokuPlayerHandle handle,
-    const uint8_t* board_cells,
-    int current_seat,
-    int stone_to_place,
-    int phase);
+// phase: 0=PlaceInitialThree, 1=Swap2Decision, 2=Swap2PlaceTwo, 3=ChooseColor,
+// 4=Standard Returns chosen action ID (0-224 placement, 225-229 Swap2 choice)
+GOMOKU_PLUGIN_API int gomoku_player_inquire_action(GomokuPlayerHandle handle,
+                                                   const uint8_t* board_cells,
+                                                   int current_seat,
+                                                   int stone_to_place,
+                                                   int phase);
 
 // Informs engine player of the action actually applied to the board
-GOMOKU_PLUGIN_API void gomoku_player_apply_action(
-    GomokuPlayerHandle handle, int action_id);
+GOMOKU_PLUGIN_API void gomoku_player_apply_action(GomokuPlayerHandle handle,
+                                                  int action_id);
 
 // Match lifecycle: match end
 GOMOKU_PLUGIN_API void gomoku_player_on_match_end(
@@ -90,14 +90,16 @@ GOMOKU_PLUGIN_API void gomoku_player_on_match_end(
 // Optional live telemetry: estimated win rate ([-1.0, 1.0] or [0.0, 1.0])
 // Safe to call concurrently while gomoku_player_inquire_action is in-flight.
 // Returns 1 if supported and populated, 0 otherwise.
-GOMOKU_PLUGIN_API int gomoku_player_get_win_rate(
-    GomokuPlayerHandle handle, float* out_win_rate);
+GOMOKU_PLUGIN_API int gomoku_player_get_win_rate(GomokuPlayerHandle handle,
+                                                 float* out_win_rate);
 
-// Optional live telemetry: policy distribution over all actions (typically 230).
-// Safe to call concurrently while gomoku_player_inquire_action is in-flight.
-// Returns number of action probabilities written, or 0 if not supported.
-GOMOKU_PLUGIN_API int gomoku_player_get_policy(
-    GomokuPlayerHandle handle, float* out_policy, int max_actions);
+// Optional live telemetry: policy distribution over all actions (typically
+// 230). Safe to call concurrently while gomoku_player_inquire_action is
+// in-flight. Returns number of action probabilities written, or 0 if not
+// supported.
+GOMOKU_PLUGIN_API int gomoku_player_get_policy(GomokuPlayerHandle handle,
+                                               float* out_policy,
+                                               int max_actions);
 
 // Cancels / aborts an active in-flight action inquiry
 GOMOKU_PLUGIN_API void gomoku_player_cancel_inquiry(GomokuPlayerHandle handle);

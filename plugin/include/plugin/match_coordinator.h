@@ -11,8 +11,8 @@
 namespace gomoku::plugin {
 
 // Callback invoked after each move is applied
-using StepCallback = std::function<void(const BoardState& state, int last_action,
-                                        IPlayer* moving_player)>;
+using StepCallback = std::function<void(
+    const BoardState& state, int last_action, IPlayer* moving_player)>;
 
 class MatchCoordinator {
  public:
@@ -20,19 +20,19 @@ class MatchCoordinator {
   ~MatchCoordinator() = default;
 
   // Plays an entire match from start to finish synchronously.
-  MatchResultInfo PlayMatch(
-      IPlayer* player_a, IPlayer* player_b,
-      Difficulty diff_a = Difficulty::kVeteran,
-      Difficulty diff_b = Difficulty::kVeteran,
-      const StepCallback& step_callback = nullptr);
+  MatchResultInfo PlayMatch(IPlayer* player_a, IPlayer* player_b,
+                            Difficulty diff_a = Difficulty::kVeteran,
+                            Difficulty diff_b = Difficulty::kVeteran,
+                            const StepCallback& step_callback = nullptr);
 
   // Step-by-step match execution (suitable for interactive GUI event loops)
   void StartMatch(IPlayer* player_a, IPlayer* player_b,
                   Difficulty diff_a = Difficulty::kVeteran,
                   Difficulty diff_b = Difficulty::kVeteran);
 
-  // Executes one turn (inquires move from current player, applies it to board and both players)
-  // Returns true if a valid move was executed, false if match already ended.
+  // Executes one turn (inquires move from current player, applies it to board
+  // and both players) Returns true if a valid move was executed, false if match
+  // already ended.
   bool Step(const StepCallback& step_callback = nullptr);
 
   // Cancels / aborts the active match (resets players and terminates)

@@ -97,7 +97,8 @@ bool BoardState::CheckExactFive(int x, int y, Stone s) const {
       ny -= dy;
     }
 
-    // Exact five rule: exactly 5 consecutive stones wins (overline does not win)
+    // Exact five rule: exactly 5 consecutive stones wins (overline does not
+    // win)
     if (count == 5) return true;
   }
   return false;

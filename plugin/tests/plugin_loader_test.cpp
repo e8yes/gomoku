@@ -101,8 +101,8 @@ TEST_F(PluginLoaderTest, ConcurrentTelemetryWhileInquiryInFlight) {
   board.ApplyAction(BoardState::ActionFromXY(8, 8));
 
   // Launch inquiry asynchronously in worker thread
-  auto inquiry_future =
-      std::async(std::launch::async, [&]() { return player->InquireAction(board); });
+  auto inquiry_future = std::async(
+      std::launch::async, [&]() { return player->InquireAction(board); });
 
   // Concurrently poll telemetry from main/GUI thread
   for (int i = 0; i < 5; ++i) {

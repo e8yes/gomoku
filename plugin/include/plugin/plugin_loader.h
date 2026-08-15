@@ -29,13 +29,16 @@ class LoadedPlugin : public std::enable_shared_from_this<LoadedPlugin> {
   ~LoadedPlugin();
 
   // Instantiates a new IPlayer engine instance from this plugin.
-  std::unique_ptr<IPlayer> CreatePlayer(
-      const std::string& config_json = "{}");
+  std::unique_ptr<IPlayer> CreatePlayer(const std::string& config_json = "{}");
 
   const GomokuPluginInfo& GetInfo() const { return info_; }
   const std::filesystem::path& GetPath() const { return path_; }
-  std::string GetName() const { return info_.plugin_name ? info_.plugin_name : "UnnamedPlugin"; }
-  std::string GetVersion() const { return info_.plugin_version ? info_.plugin_version : "1.0"; }
+  std::string GetName() const {
+    return info_.plugin_name ? info_.plugin_name : "UnnamedPlugin";
+  }
+  std::string GetVersion() const {
+    return info_.plugin_version ? info_.plugin_version : "1.0";
+  }
 
  private:
   friend class EnginePluginLoader;
@@ -44,8 +47,10 @@ class LoadedPlugin : public std::enable_shared_from_this<LoadedPlugin> {
   using GetInfoFn = GomokuPluginInfo (*)();
   using CreateFn = GomokuPlayerHandle (*)(const char*);
   using DestroyFn = void (*)(GomokuPlayerHandle);
-  using OnMatchStartFn = void (*)(GomokuPlayerHandle, const GomokuMatchSettings*);
-  using InquireActionFn = int (*)(GomokuPlayerHandle, const uint8_t*, int, int, int);
+  using OnMatchStartFn = void (*)(GomokuPlayerHandle,
+                                  const GomokuMatchSettings*);
+  using InquireActionFn = int (*)(GomokuPlayerHandle, const uint8_t*, int, int,
+                                  int);
   using ApplyActionFn = void (*)(GomokuPlayerHandle, int);
   using OnMatchEndFn = void (*)(GomokuPlayerHandle, const GomokuMatchResult*);
   using GetWinRateFn = int (*)(GomokuPlayerHandle, float*);

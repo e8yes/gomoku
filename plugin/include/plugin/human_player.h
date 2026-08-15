@@ -24,7 +24,8 @@ class HumanPlayer : public IPlayer {
   bool IsHuman() const override { return true; }
 
   // GUI Bridge Functions:
-  // Called by QtQuick / GUI event handlers when human clicks a cell or selects a Swap2 option.
+  // Called by QtQuick / GUI event handlers when human clicks a cell or selects
+  // a Swap2 option.
   bool SubmitAction(int action_id);
 
   // Returns true if the human player is currently being inquired for a move.

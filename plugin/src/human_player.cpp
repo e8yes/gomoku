@@ -4,9 +4,7 @@ namespace gomoku::plugin {
 
 HumanPlayer::HumanPlayer(std::string name) : name_(std::move(name)) {}
 
-HumanPlayer::~HumanPlayer() {
-  CancelInquiry();
-}
+HumanPlayer::~HumanPlayer() { CancelInquiry(); }
 
 void HumanPlayer::OnMatchStart(const MatchSettings& settings) {
   std::lock_guard<std::mutex> lock(mutex_);

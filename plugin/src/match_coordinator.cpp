@@ -4,9 +4,7 @@
 
 namespace gomoku::plugin {
 
-MatchCoordinator::MatchCoordinator() {
-  finished_ = true;
-}
+MatchCoordinator::MatchCoordinator() { finished_ = true; }
 
 IPlayer* MatchCoordinator::GetCurrentPlayer() const {
   if (finished_ || !player_a_ || !player_b_) return nullptr;
@@ -92,8 +90,10 @@ bool MatchCoordinator::Step(const StepCallback& step_callback) {
   return true;
 }
 
-MatchResultInfo MatchCoordinator::PlayMatch(IPlayer* player_a, IPlayer* player_b,
-                                            Difficulty diff_a, Difficulty diff_b,
+MatchResultInfo MatchCoordinator::PlayMatch(IPlayer* player_a,
+                                            IPlayer* player_b,
+                                            Difficulty diff_a,
+                                            Difficulty diff_b,
                                             const StepCallback& step_callback) {
   StartMatch(player_a, player_b, diff_a, diff_b);
 

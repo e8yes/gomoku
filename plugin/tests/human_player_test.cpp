@@ -25,8 +25,8 @@ TEST(HumanPlayerTest, ThreadedMoveSubmission) {
   BoardState board;
 
   // Inquire action in background thread
-  auto future_action =
-      std::async(std::launch::async, [&]() { return player.InquireAction(board); });
+  auto future_action = std::async(
+      std::launch::async, [&]() { return player.InquireAction(board); });
 
   // Wait for player to enter waiting state
   while (!player.IsWaitingForAction()) {
@@ -49,8 +49,8 @@ TEST(HumanPlayerTest, Cancellation) {
   HumanPlayer player("Charlie");
   BoardState board;
 
-  auto future_action =
-      std::async(std::launch::async, [&]() { return player.InquireAction(board); });
+  auto future_action = std::async(
+      std::launch::async, [&]() { return player.InquireAction(board); });
 
   while (!player.IsWaitingForAction()) {
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
