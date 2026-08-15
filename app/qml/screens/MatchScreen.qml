@@ -52,6 +52,7 @@ Rectangle {
                 stoneColor: root.gameController ? root.gameController.playerAStone : 0
                 winRateText: root.gameController ? root.gameController.playerAWinRateText : "50.0%"
                 isCurrentTurn: root.gameController ? (root.gameController.currentSeat === "A" && !root.gameController.isGameOver) : false
+                isThinking: root.gameController ? (root.gameController.currentSeat === "A" && root.gameController.isAiThinking) : false
             }
 
             PlayerCard {
@@ -62,6 +63,7 @@ Rectangle {
                 stoneColor: root.gameController ? root.gameController.playerBStone : 0
                 winRateText: root.gameController ? root.gameController.playerBWinRateText : "50.0%"
                 isCurrentTurn: root.gameController ? (root.gameController.currentSeat === "B" && !root.gameController.isGameOver) : false
+                isThinking: root.gameController ? (root.gameController.currentSeat === "B" && root.gameController.isAiThinking) : false
             }
 
             // Win Rate Balance Gauge

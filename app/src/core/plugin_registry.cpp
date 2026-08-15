@@ -133,7 +133,13 @@ std::unique_ptr<gomoku::plugin::IPlayer> PluginRegistry::CreatePlayer(
 
   auto it = loaded_plugins_.find(engine_name);
   if (it != loaded_plugins_.end() && it->second) {
-    return it->second->CreatePlayer(config_json);
+    try {
+      return it->second->CreatePlayer(config_json);
+    } catch (const std::exception& e) {
+      std::cerr << "Failed to instantiate player from plugin '" << engine_name
+                << "': " << e.what() << std::endl;
+      return nullptr;
+    }
   }
   return nullptr;
 }

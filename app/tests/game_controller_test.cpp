@@ -108,6 +108,37 @@ TEST_F(GameControllerTest, Resignation) {
   EXPECT_EQ(controller.terminationReason().toStdString(), "resignation");
 }
 
+TEST_F(GameControllerTest, ResignationInPvEMatchDuringAiTurn) {
+  int argc = 0;
+  char* argv[] = {nullptr};
+  QCoreApplication app(argc, argv);
+
+  if (PluginRegistry::Instance().availableEngines().contains("SampleGomokuEngine")) {
+    GameController controller;
+    // Human is Seat A, AI Engine is Seat B
+    controller.startMatch("Human", "SampleGomokuEngine", 3, 3);
+
+    // Human plays 3 opening stones
+    controller.submitBoardClick(7, 7);
+    controller.submitBoardClick(7, 8);
+    controller.submitBoardClick(7, 6);
+
+    // Current turn is Seat B (AI engine)
+    EXPECT_EQ(controller.currentSeat().toStdString(), "B");
+    EXPECT_FALSE(controller.isHumanTurn());
+
+    // Human clicks Resign while it is the AI's turn
+    controller.resignMatch();
+
+    // Winner must be B (the AI), and NOT the resigning human (A)
+    EXPECT_TRUE(controller.isGameOver());
+    EXPECT_EQ(controller.winnerSeat().toStdString(), "B");
+    EXPECT_EQ(controller.terminationReason().toStdString(), "resignation");
+
+    controller.abortMatch();
+  }
+}
+
 TEST_F(GameControllerTest, ReplayControllerPlayback) {
   int argc = 0;
   char* argv[] = {nullptr};

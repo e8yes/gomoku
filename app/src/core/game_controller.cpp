@@ -57,7 +57,7 @@ int GameController::currentStoneToPlace() const {
 bool GameController::isHumanTurn() const {
   if (is_game_over_) return false;
   auto* player = GetCurrentPlayer();
-  if (!player) return true;
+  if (!player) return false;
   return player->IsHuman();
 }
 
@@ -148,17 +148,51 @@ void GameController::startMatch(const QString& playerA, const QString& playerB,
   emit matchSetupChanged();
 
   // Instantiate Player A
-  if (PluginRegistry::Instance().isEnginePlugin(playerA)) {
-    player_a_ = PluginRegistry::Instance().CreatePlayer(playerA.toStdString());
-  } else {
-    player_a_ = std::make_unique<gomoku::plugin::HumanPlayer>(player_a_name_.toStdString());
+  try {
+    if (PluginRegistry::Instance().isEnginePlugin(playerA)) {
+      player_a_ = PluginRegistry::Instance().CreatePlayer(playerA.toStdString());
+      if (!player_a_) {
+        emit errorMessage(QString("Failed to instantiate engine plugin for Seat A: %1").arg(playerA));
+        is_game_over_ = true;
+        winner_seat_ = "B";
+        termination_reason_ = "plugin_initialization_failed";
+        emit gameOverChanged();
+        return;
+      }
+    } else {
+      player_a_ = std::make_unique<gomoku::plugin::HumanPlayer>(player_a_name_.toStdString());
+    }
+  } catch (const std::exception& e) {
+    emit errorMessage(QString("Exception initializing Player A (%1): %2").arg(playerA, e.what()));
+    is_game_over_ = true;
+    winner_seat_ = "B";
+    termination_reason_ = "plugin_initialization_failed";
+    emit gameOverChanged();
+    return;
   }
 
   // Instantiate Player B
-  if (PluginRegistry::Instance().isEnginePlugin(playerB)) {
-    player_b_ = PluginRegistry::Instance().CreatePlayer(playerB.toStdString());
-  } else {
-    player_b_ = std::make_unique<gomoku::plugin::HumanPlayer>(player_b_name_.toStdString());
+  try {
+    if (PluginRegistry::Instance().isEnginePlugin(playerB)) {
+      player_b_ = PluginRegistry::Instance().CreatePlayer(playerB.toStdString());
+      if (!player_b_) {
+        emit errorMessage(QString("Failed to instantiate engine plugin for Seat B: %1").arg(playerB));
+        is_game_over_ = true;
+        winner_seat_ = "A";
+        termination_reason_ = "plugin_initialization_failed";
+        emit gameOverChanged();
+        return;
+      }
+    } else {
+      player_b_ = std::make_unique<gomoku::plugin::HumanPlayer>(player_b_name_.toStdString());
+    }
+  } catch (const std::exception& e) {
+    emit errorMessage(QString("Exception initializing Player B (%1): %2").arg(playerB, e.what()));
+    is_game_over_ = true;
+    winner_seat_ = "A";
+    termination_reason_ = "plugin_initialization_failed";
+    emit gameOverChanged();
+    return;
   }
 
   // Reset board & state
@@ -222,6 +256,8 @@ void GameController::TriggerAiTurnIfNeeded() {
   }
 
   is_ai_thinking_ = true;
+  emit aiThinkingChanged();
+
   ai_thread_ = std::thread([this, player]() {
     // Perform AI search
     int action_id = player->InquireAction(board_state_);
@@ -230,6 +266,7 @@ void GameController::TriggerAiTurnIfNeeded() {
 
     // Dispatch action to Qt main thread
     QMetaObject::invokeMethod(this, [this, action_id]() {
+      emit aiThinkingChanged();
       if (!is_game_over_) {
         ProcessMove(action_id);
       }
@@ -412,11 +449,25 @@ bool GameController::submitSwap2Action(int actionId) {
   return true;
 }
 
-void GameController::resignMatch() {
+void GameController::resignMatch(const QString& resigningSeat) {
   if (is_game_over_) return;
 
-  std::string winner =
-      (board_state_.current_seat == gomoku::plugin::Seat::kA) ? "B" : "A";
+  std::string resigning = resigningSeat.toUpper().toStdString();
+  if (resigning != "A" && resigning != "B") {
+    // If one seat is human and the other is AI, the human is the one resigning
+    bool a_is_human = player_a_ && player_a_->IsHuman();
+    bool b_is_human = player_b_ && player_b_->IsHuman();
+    if (a_is_human && !b_is_human) {
+      resigning = "A";
+    } else if (!a_is_human && b_is_human) {
+      resigning = "B";
+    } else {
+      // Default to currently active seat
+      resigning = (board_state_.current_seat == gomoku::plugin::Seat::kA) ? "A" : "B";
+    }
+  }
+
+  std::string winner = (resigning == "A") ? "B" : "A";
   auto result = (winner == "A") ? gomoku::plugin::GameResult::kPlayerAWin
                                 : gomoku::plugin::GameResult::kPlayerBWin;
 
@@ -432,6 +483,11 @@ void GameController::abortMatch() {
 
   if (ai_thread_.joinable()) {
     ai_thread_.join();
+  }
+
+  if (is_ai_thinking_) {
+    is_ai_thinking_ = false;
+    emit aiThinkingChanged();
   }
 
   win_rate_timer_.stop();

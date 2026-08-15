@@ -10,13 +10,14 @@ Rectangle {
     property int stoneColor: 0  // 0=Pending, 1=Black, 2=White
     property string winRateText: "50.0%"
     property bool isCurrentTurn: false
+    property bool isThinking: false
 
     implicitWidth: 320
     implicitHeight: 90
 
     radius: GomokuTheme.radiusMedium
     color: isCurrentTurn ? GomokuTheme.surfaceLight : GomokuTheme.surfaceDark
-    border.color: isCurrentTurn ? GomokuTheme.textAccent : GomokuTheme.border
+    border.color: isThinking ? GomokuTheme.textWarning : (isCurrentTurn ? GomokuTheme.textAccent : GomokuTheme.border)
     border.width: isCurrentTurn ? 2 : 1
 
     Row {
@@ -71,7 +72,25 @@ Rectangle {
                     font.bold: true
                     color: GomokuTheme.textPrimary
                     elide: Text.ElideRight
-                    width: parent.width - 70
+                    width: parent.width - 150
+                }
+
+                Rectangle {
+                    visible: root.isThinking
+                    width: 76
+                    height: 20
+                    radius: 4
+                    color: "#4A3B18"
+                    border.color: GomokuTheme.textWarning
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: "Thinking..."
+                        font.family: GomokuTheme.fontFamily
+                        font.pixelSize: 10
+                        font.bold: true
+                        color: GomokuTheme.textWarning
+                    }
                 }
             }
 

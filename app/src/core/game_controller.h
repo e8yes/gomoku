@@ -30,6 +30,7 @@ class GameController : public QObject {
   Q_PROPERTY(QString currentSeat READ currentSeat NOTIFY turnChanged)
   Q_PROPERTY(int currentStoneToPlace READ currentStoneToPlace NOTIFY turnChanged)
   Q_PROPERTY(bool isHumanTurn READ isHumanTurn NOTIFY turnChanged)
+  Q_PROPERTY(bool isAiThinking READ isAiThinking NOTIFY aiThinkingChanged)
   Q_PROPERTY(QString playerAName READ playerAName NOTIFY matchSetupChanged)
   Q_PROPERTY(QString playerBName READ playerBName NOTIFY matchSetupChanged)
   Q_PROPERTY(QString playerAType READ playerAType NOTIFY matchSetupChanged)
@@ -58,6 +59,7 @@ class GameController : public QObject {
   QString currentSeat() const;
   int currentStoneToPlace() const;
   bool isHumanTurn() const;
+  bool isAiThinking() const { return is_ai_thinking_; }
   QString playerAName() const { return player_a_name_; }
   QString playerBName() const { return player_b_name_; }
   QString playerAType() const { return player_a_type_; }
@@ -83,7 +85,7 @@ class GameController : public QObject {
                               int difficultyA = 3, int difficultyB = 3);
   Q_INVOKABLE bool submitBoardClick(int x, int y);
   Q_INVOKABLE bool submitSwap2Action(int actionId);
-  Q_INVOKABLE void resignMatch();
+  Q_INVOKABLE void resignMatch(const QString& resigningSeat = "");
   Q_INVOKABLE void abortMatch();
 
  signals:
@@ -93,8 +95,10 @@ class GameController : public QObject {
   void stonesAssigned();
   void winRateUpdated();
   void gameOverChanged();
+  void aiThinkingChanged();
   void moveApplied(int actionId);
   void matchSetupChanged();
+  void errorMessage(const QString& message);
 
  private slots:
   void OnWinRatePollTimeout();
