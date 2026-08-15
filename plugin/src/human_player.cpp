@@ -36,14 +36,7 @@ int HumanPlayer::InquireAction(const BoardState& board) {
   return action;
 }
 
-void HumanPlayer::ApplyAction(int /*action_id*/) {
-  std::lock_guard<std::mutex> lock(mutex_);
-  // In case an external action was applied while waiting
-  if (waiting_for_action_ && submitted_action_ < 0) {
-    waiting_for_action_ = false;
-    cv_.notify_all();
-  }
-}
+void HumanPlayer::ApplyAction(int /*action_id*/) {}
 
 void HumanPlayer::OnMatchEnd(const MatchResultInfo& /*result_info*/) {
   CancelInquiry();

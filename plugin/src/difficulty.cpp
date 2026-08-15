@@ -1,6 +1,7 @@
 #include "plugin/difficulty.h"
 
 #include <algorithm>
+#include <cctype>
 
 namespace gomoku::plugin {
 

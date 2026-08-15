@@ -148,14 +148,8 @@ void BoardState::ApplyAction(int action_id) {
     ++move_count;
 
     if (CheckExactFive(x, y, stone_to_place)) {
-      if (phase == GamePhase::kStandard) {
-        result = (current_seat == Seat::kA) ? GameResult::kPlayerAWin
-                                            : GameResult::kPlayerBWin;
-      } else {
-        // Winning during opening placement
-        result = (stone_to_place == Stone::kBlack) ? GameResult::kPlayerAWin
-                                                   : GameResult::kPlayerBWin;
-      }
+      result = (current_seat == Seat::kA) ? GameResult::kPlayerAWin
+                                          : GameResult::kPlayerBWin;
       return;
     }
 
