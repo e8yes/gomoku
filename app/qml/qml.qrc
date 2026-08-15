@@ -1,0 +1,19 @@
+<RCC>
+    <qresource prefix="/">
+        <file>Main.qml</file>
+        <file>theme/qmldir</file>
+        <file>theme/GomokuTheme.qml</file>
+        <file>components/Stone.qml</file>
+        <file>components/BoardCell.qml</file>
+        <file>components/GomokuBoard.qml</file>
+        <file>components/PlayerCard.qml</file>
+        <file>components/Swap2Controls.qml</file>
+        <file>components/WinRateGauge.qml</file>
+        <file>components/ActionHistoryView.qml</file>
+        <file>components/ReplayControls.qml</file>
+        <file>components/MatchHistoryTable.qml</file>
+        <file>screens/MainScreen.qml</file>
+        <file>screens/MatchScreen.qml</file>
+        <file>screens/ReplayScreen.qml</file>
+    </qresource>
+</RCC>

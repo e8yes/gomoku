@@ -34,6 +34,10 @@
 # C++ Build directories and tooling
 build/
 build_plugin/
+build_app/
+gomoku_app.sqlite
+gomoku_app.sqlite-wal
+gomoku_app.sqlite-shm
 bin/
 lib/
 CMakeCache.txt
