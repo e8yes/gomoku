@@ -177,7 +177,7 @@ int main(int argc, char** argv) {
               << "positions"
               << (FLAGS_disable_endgame_solver
                       ? "; endgame solver disabled"
-                      : "; VCF attacker/defender enabled");
+                      : "; VCF attacker enabled (defensive VCF disabled for self-play data generation)");
     if (mixed_game_count > 0) {
       LOG(INFO) << "Mixing " << mixed_game_count
                 << " games against the previous champion with seats balanced; "
@@ -189,9 +189,6 @@ int main(int argc, char** argv) {
     EndgameDefenseSolver defensive_solver;
     if (!FLAGS_disable_endgame_solver) {
       solver = [](const Board& board) { return SolveVCF(board); };
-      defensive_solver = [](const Board& board) {
-        return AnalyzeVCFDefense(board);
-      };
     }
 
     std::atomic<int> next_game{0};
