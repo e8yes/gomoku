@@ -1,6 +1,7 @@
 <RCC>
     <qresource prefix="/">
         <file>Main.qml</file>
+        <file>theme/qmldir</file>
         <file>theme/GomokuTheme.qml</file>
         <file>components/Stone.qml</file>
         <file>components/BoardCell.qml</file>

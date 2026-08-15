@@ -44,8 +44,8 @@ Rectangle {
                 onTogglePlay: if (root.replayController) root.replayController.togglePlay()
                 onStepForward: if (root.replayController) root.replayController.stepForward()
                 onJumpToEnd: if (root.replayController) root.replayController.jumpToEnd()
-                onSeekToPly: (ply) => if (root.replayController) root.replayController.seekToPly(ply)
-                onSpeedSelected: (ms) => if (root.replayController) root.replayController.setPlaybackSpeed(ms)
+                onSeekToPly: (ply) => { if (root.replayController) root.replayController.seekToPly(ply); }
+                onSpeedSelected: (ms) => { if (root.replayController) root.replayController.setPlaybackSpeed(ms); }
             }
         }
 

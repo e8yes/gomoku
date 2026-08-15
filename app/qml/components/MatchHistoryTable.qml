@@ -18,7 +18,7 @@ Rectangle {
         spacing: GomokuTheme.spacingSmall
 
         // Header Row
-        Row {
+        Item {
             width: parent.width
             height: 30
 
@@ -28,13 +28,13 @@ Rectangle {
                 font.pixelSize: GomokuTheme.fontSizeMedium
                 font.bold: true
                 color: GomokuTheme.textPrimary
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
             }
 
-            Item { width: 1; height: 1; Layout.fillWidth: true }
-
             Rectangle {
                 anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
                 width: 80
                 height: 28
                 radius: GomokuTheme.radiusSmall

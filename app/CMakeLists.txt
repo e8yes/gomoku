@@ -69,6 +69,7 @@ target_link_libraries(app_core_lib PUBLIC
 # ---------------------------------------------------------------------------
 add_executable(gomoku_app
   src/main.cpp
+  qml/qml.qrc
 )
 
 target_link_libraries(gomoku_app PRIVATE

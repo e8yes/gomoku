@@ -21,10 +21,9 @@ Rectangle {
         spacing: GomokuTheme.spacingMedium
 
         // Header Title
-        Row {
+        Item {
             width: parent.width
             height: 40
-            spacing: 12
 
             Text {
                 text: "⚫⚪ Gomoku Swap2 Arena"
@@ -32,13 +31,13 @@ Rectangle {
                 font.pixelSize: GomokuTheme.fontSizeTitle
                 font.bold: true
                 color: GomokuTheme.textPrimary
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
             }
 
-            Item { width: 1; height: 1; Layout.fillWidth: true }
-
             Rectangle {
                 anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
                 width: 130
                 height: 32
                 radius: GomokuTheme.radiusSmall
@@ -154,8 +153,6 @@ Rectangle {
                             currentIndex: 3
                         }
                     }
-
-                    Item { width: 1; height: 1; Layout.fillWidth: true }
 
                     // Start Match Button
                     Rectangle {

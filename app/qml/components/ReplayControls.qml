@@ -31,11 +31,13 @@ Rectangle {
         spacing: 8
 
         // Top info row: current move & recorded win rate
-        Row {
+        Item {
             width: parent.width
             height: 20
 
             Text {
+                anchors.left: parent.left
+                anchors.verticalCenter: parent.verticalCenter
                 text: "Ply: " + root.currentPly + " / " + root.totalPlies +
                       (root.currentActionLabel.length > 0 ? (" (" + root.currentActionLabel + ")") : "")
                 font.family: GomokuTheme.fontFamily
@@ -44,10 +46,9 @@ Rectangle {
                 color: GomokuTheme.textPrimary
             }
 
-            Item { width: 1; height: 1; Layout.fillWidth: true }
-
             Text {
                 anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
                 text: root.currentWinRateText !== "-" ? ("Recorded Eval: " + root.currentWinRateText) : ""
                 font.family: GomokuTheme.fontFamily
                 font.pixelSize: GomokuTheme.fontSizeSmall

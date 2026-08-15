@@ -18,6 +18,7 @@ int main(int argc, char* argv[]) {
   app.setApplicationName("GomokuArena");
 
   QQuickStyle::setStyle("Basic");
+  Q_INIT_RESOURCE(qml);
 
   // Open SQLite database
   if (!gomoku::app::DatabaseManager::Instance().Open()) {
@@ -25,6 +26,7 @@ int main(int argc, char* argv[]) {
   }
 
   // Register C++ Types with QML
+  qmlRegisterSingletonType(QUrl("qrc:/theme/GomokuTheme.qml"), "Gomoku.App", 1, 0, "GomokuTheme");
   qmlRegisterUncreatableType<gomoku::app::BoardViewModel>(
       "Gomoku.App", 1, 0, "BoardViewModel", "Provided by GameController");
   qmlRegisterUncreatableType<gomoku::app::MoveHistoryModel>(

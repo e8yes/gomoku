@@ -46,7 +46,7 @@ QtObject {
     readonly property int fontSizeTitle: 22
     readonly property int fontSizeHeader: 28
 
-    readonly string fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
+    readonly property string fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
 
     // Spacing
     readonly property int spacingSmall: 8
