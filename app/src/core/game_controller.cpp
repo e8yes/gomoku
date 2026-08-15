@@ -136,8 +136,10 @@ QString GameController::openingPromptText() const {
 
 void GameController::startMatch(const QString& playerA, const QString& playerB,
                                 int difficultyA, int difficultyB) {
+  // 1. Abort any active match / timers / worker threads
   abortMatch();
 
+  // 2. Clear / Reset entire match state and UI models upfront before player instantiation
   player_a_name_ = playerA.isEmpty() ? "Human A" : playerA;
   player_b_name_ = playerB.isEmpty() ? "Human B" : playerB;
   player_a_type_ = playerA;
@@ -145,17 +147,39 @@ void GameController::startMatch(const QString& playerA, const QString& playerB,
   difficulty_a_ = difficultyA;
   difficulty_b_ = difficultyB;
 
-  emit matchSetupChanged();
+  player_a_.reset();
+  player_b_.reset();
 
-  // Instantiate Player A
+  board_state_ = gomoku::plugin::BoardState();
+  move_history_.clear();
+  current_ply_count_ = 0;
+  opening_path_ = 0;
+  is_game_over_ = true;
+  winner_seat_ = "";
+  termination_reason_ = "";
+  game_result_ = gomoku::plugin::GameResult::kUndetermined;
+  player_a_win_rate_ = 0.5;
+  player_b_win_rate_ = 0.5;
+  db_match_id_ = -1;
+
+  board_model_.clearBoard();
+  move_history_model_.Clear();
+
+  emit matchSetupChanged();
+  emit phaseChanged();
+  emit turnChanged();
+  emit stonesAssigned();
+  emit winRateUpdated();
+  emit gameOverChanged();
+  emit moveApplied(0);
+
+  // 3. Instantiate Player A
   try {
     if (PluginRegistry::Instance().isEnginePlugin(playerA)) {
       player_a_ = PluginRegistry::Instance().CreatePlayer(playerA.toStdString());
       if (!player_a_) {
-        emit errorMessage(QString("Failed to instantiate engine plugin for Seat A: %1").arg(playerA));
-        is_game_over_ = true;
-        winner_seat_ = "B";
         termination_reason_ = "plugin_initialization_failed";
+        emit errorMessage(QString("Failed to instantiate engine plugin for Seat A: %1").arg(playerA));
         emit gameOverChanged();
         return;
       }
@@ -163,23 +187,19 @@ void GameController::startMatch(const QString& playerA, const QString& playerB,
       player_a_ = std::make_unique<gomoku::plugin::HumanPlayer>(player_a_name_.toStdString());
     }
   } catch (const std::exception& e) {
-    emit errorMessage(QString("Exception initializing Player A (%1): %2").arg(playerA, e.what()));
-    is_game_over_ = true;
-    winner_seat_ = "B";
     termination_reason_ = "plugin_initialization_failed";
+    emit errorMessage(QString("Exception initializing Player A (%1): %2").arg(playerA, e.what()));
     emit gameOverChanged();
     return;
   }
 
-  // Instantiate Player B
+  // 4. Instantiate Player B
   try {
     if (PluginRegistry::Instance().isEnginePlugin(playerB)) {
       player_b_ = PluginRegistry::Instance().CreatePlayer(playerB.toStdString());
       if (!player_b_) {
-        emit errorMessage(QString("Failed to instantiate engine plugin for Seat B: %1").arg(playerB));
-        is_game_over_ = true;
-        winner_seat_ = "A";
         termination_reason_ = "plugin_initialization_failed";
+        emit errorMessage(QString("Failed to instantiate engine plugin for Seat B: %1").arg(playerB));
         emit gameOverChanged();
         return;
       }
@@ -187,28 +207,14 @@ void GameController::startMatch(const QString& playerA, const QString& playerB,
       player_b_ = std::make_unique<gomoku::plugin::HumanPlayer>(player_b_name_.toStdString());
     }
   } catch (const std::exception& e) {
-    emit errorMessage(QString("Exception initializing Player B (%1): %2").arg(playerB, e.what()));
-    is_game_over_ = true;
-    winner_seat_ = "A";
     termination_reason_ = "plugin_initialization_failed";
+    emit errorMessage(QString("Exception initializing Player B (%1): %2").arg(playerB, e.what()));
     emit gameOverChanged();
     return;
   }
 
-  // Reset board & state
-  board_state_ = gomoku::plugin::BoardState();
-  move_history_.clear();
-  current_ply_count_ = 0;
-  opening_path_ = 0;
+  // 5. Match officially starts
   is_game_over_ = false;
-  winner_seat_ = "";
-  termination_reason_ = "";
-  game_result_ = gomoku::plugin::GameResult::kUndetermined;
-  player_a_win_rate_ = 0.5;
-  player_b_win_rate_ = 0.5;
-
-  board_model_.clearBoard();
-  move_history_model_.Clear();
 
   // Record match start in SQLite database
   db_match_id_ = DatabaseManager::Instance().CreateMatch(
@@ -462,7 +468,7 @@ void GameController::resignMatch(const QString& resigningSeat) {
     } else if (!a_is_human && b_is_human) {
       resigning = "B";
     } else {
-      // Default to currently active seat
+      // Hot-seat PvP: infer from currently active seat
       resigning = (board_state_.current_seat == gomoku::plugin::Seat::kA) ? "A" : "B";
     }
   }
@@ -485,11 +491,7 @@ void GameController::abortMatch() {
     ai_thread_.join();
   }
 
-  if (is_ai_thinking_) {
-    is_ai_thinking_ = false;
-    emit aiThinkingChanged();
-  }
-
+  is_ai_thinking_ = false;
   win_rate_timer_.stop();
 }
 

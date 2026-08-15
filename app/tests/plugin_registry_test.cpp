@@ -29,21 +29,22 @@ TEST(PluginRegistryTest, DiscoverSampleEnginePlugin) {
   QStringList engines = registry.availableEngines();
   EXPECT_GE(engines.size(), 1);
 
-  // If engine_plugin_sample is present in CWD
-  if (engines.contains("SampleGomokuEngine")) {
-    EXPECT_TRUE(registry.isEnginePlugin("SampleGomokuEngine"));
-    EXPECT_EQ(registry.getPluginVersion("SampleGomokuEngine").toStdString(), "1.0.0");
-    EXPECT_EQ(registry.getPluginAuthor("SampleGomokuEngine").toStdString(), "Antigravity Team");
-
-    auto player = registry.CreatePlayer("SampleGomokuEngine");
-    ASSERT_NE(player, nullptr);
-    EXPECT_EQ(player->GetName(), "SampleGomokuEngine");
-    EXPECT_FALSE(player->IsHuman());
-
-    // Test estimated win rate query
-    auto wr = player->GetEstimatedWinRate();
-    EXPECT_TRUE(wr.has_value());
+  if (!engines.contains("SampleGomokuEngine")) {
+    GTEST_SKIP() << "SampleGomokuEngine plugin not found in current directory";
   }
+
+  EXPECT_TRUE(registry.isEnginePlugin("SampleGomokuEngine"));
+  EXPECT_EQ(registry.getPluginVersion("SampleGomokuEngine").toStdString(), "1.0.0");
+  EXPECT_EQ(registry.getPluginAuthor("SampleGomokuEngine").toStdString(), "Antigravity Team");
+
+  auto player = registry.CreatePlayer("SampleGomokuEngine");
+  ASSERT_NE(player, nullptr);
+  EXPECT_EQ(player->GetName(), "SampleGomokuEngine");
+  EXPECT_FALSE(player->IsHuman());
+
+  // Test estimated win rate query
+  auto wr = player->GetEstimatedWinRate();
+  EXPECT_TRUE(wr.has_value());
 }
 
 }  // namespace gomoku::app
