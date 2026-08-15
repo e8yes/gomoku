@@ -8,6 +8,7 @@ from curriculum import (
     CurriculumConfig,
     adaptive_training_window,
     find_champion_training_weights,
+    load_prior_history,
     run_iteration,
 )
 
@@ -145,6 +146,48 @@ class CurriculumPolicyTest(unittest.TestCase):
             self.assertEqual(
                 commands[1][commands[1].index("--simulations") + 1], "800"
             )
+
+    def test_load_prior_history_reconstructs_completed_iterations(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            run_dir = Path(temp_dir)
+            export_dir = run_dir / "exported_models"
+            diag_dir = run_dir / "diagnostics"
+            export_dir.mkdir()
+            diag_dir.mkdir()
+
+            (export_dir / "challenger00.json").write_text(
+                '{"policy_loss": 5.1681, "value_loss": 0.9999}'
+            )
+            (export_dir / "champion00.pt2").touch()
+
+            (export_dir / "challenger01.json").write_text(
+                '{"policy_loss": 5.1318, "value_loss": 0.9460}'
+            )
+            (export_dir / "champion01.pt2").touch()
+            eval_01_dir = diag_dir / "evaluation_01"
+            eval_01_dir.mkdir()
+            (eval_01_dir / "evaluation.json").write_text(
+                '{"challenger_win_rate": 0.985}'
+            )
+
+            config = CurriculumConfig(
+                data_dir="data",
+                diagnostics_dir=str(diag_dir),
+                model_export_path=str(export_dir),
+                base_training_window_iterations=4,
+            )
+
+            history = load_prior_history(config, 2)
+            self.assertEqual(len(history), 2)
+            self.assertEqual(history[0].iteration, 0)
+            self.assertTrue(history[0].promoted)
+            self.assertAlmostEqual(history[0].policy_loss, 5.1681)
+            self.assertAlmostEqual(history[0].value_loss, 0.9999)
+            self.assertEqual(history[1].iteration, 1)
+            self.assertTrue(history[1].promoted)
+            self.assertAlmostEqual(history[1].win_rate, 0.985)
+            self.assertAlmostEqual(history[1].policy_loss, 5.1318)
+            self.assertAlmostEqual(history[1].value_loss, 0.9460)
 
 
 if __name__ == "__main__":

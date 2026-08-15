@@ -432,6 +432,73 @@ def log_training_summary(history: List[IterationSummary]):
     logging.info("=" * 70 + "\n")
 
 
+def load_prior_history(
+    config: CurriculumConfig, start_iteration: int
+) -> List[IterationSummary]:
+    """Reconstructs IterationSummary records for already completed iterations."""
+    history = []
+    for it in range(start_iteration):
+        challenger_json = os.path.join(
+            config.model_export_path, f"challenger{it:02d}.json"
+        )
+        if not os.path.exists(challenger_json):
+            continue
+
+        try:
+            with open(challenger_json, "r") as f:
+                stats = json.load(f)
+            pi_loss = float(stats.get("policy_loss", 0.0))
+            v_loss = float(stats.get("value_loss", 0.0))
+        except Exception:
+            pi_loss, v_loss = 0.0, 0.0
+
+        champion_pt = os.path.join(
+            config.model_export_path, f"champion{it:02d}.pt2"
+        )
+        promoted = os.path.exists(champion_pt)
+
+        if it == 0:
+            win_rate = 1.0
+        else:
+            eval_json = os.path.join(
+                config.diagnostics_dir, f"evaluation_{it:02d}", "evaluation.json"
+            )
+            win_rate = 0.0
+            if os.path.exists(eval_json):
+                try:
+                    with open(eval_json, "r") as f:
+                        eval_stats = json.load(f)
+                    win_rate = float(eval_stats.get("challenger_win_rate", 0.0))
+                except Exception:
+                    win_rate = 0.0
+
+        prior_champions = [
+            p
+            for p in glob.glob(os.path.join(config.model_export_path, "champion*.pt2"))
+            if model_iteration(p) < it
+        ]
+        last_champ = (
+            max(prior_champions, key=model_iteration)
+            if prior_champions
+            else ""
+        )
+        training_window = adaptive_training_window(
+            it, last_champ, config.base_training_window_iterations
+        )
+
+        history.append(
+            IterationSummary(
+                iteration=it,
+                policy_loss=pi_loss,
+                value_loss=v_loss,
+                win_rate=win_rate,
+                promoted=promoted,
+                training_window=training_window,
+            )
+        )
+    return history
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run the Gomoku curriculum.")
     parser.add_argument(
@@ -439,8 +506,18 @@ def main():
         default="curriculum_schedule.json",
         help="Path to the curriculum JSON schedule (outputs remain relative to the current working directory).",
     )
+    parser.add_argument(
+        "--start_iteration",
+        "--start-iteration",
+        dest="start_iteration",
+        type=int,
+        default=None,
+        help="Override the start iteration from the schedule.",
+    )
     args = parser.parse_args()
     config = CurriculumConfig.load(args.schedule)
+    if args.start_iteration is not None:
+        config.start_iteration = args.start_iteration
 
     if not os.path.exists(config.weights_dir):
         os.makedirs(config.weights_dir)
@@ -461,8 +538,11 @@ def main():
     logging.info(f"Starting Iteration: {config.start_iteration}")
     logging.info(f"Ending Iteration: {config.num_iterations - 1}")
 
-    # Initial champion is None for the bootstrapping phase
-    history = []
+    # Load prior history for resumed runs
+    history = load_prior_history(config, config.start_iteration)
+    if history:
+        logging.info(f"Loaded history for {len(history)} prior iteration(s):")
+        log_training_summary(history)
 
     for i in range(config.start_iteration, config.num_iterations):
         summary = run_iteration(i, config)
@@ -478,3 +558,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
