@@ -166,16 +166,19 @@ plugin/
 
 ## 5. Building & Running Tests
 
-To build the plugin SDK, sample engine shared library, and test suite:
-
+### Option A: From Repository Root
 ```bash
 mkdir -p build_plugin && cd build_plugin
 cmake ../plugin -DCMAKE_BUILD_TYPE=Release
 make -j$(nproc)
+./gomoku_plugin_test
 ```
 
-Run the unit tests:
-
+### Option B: Standalone from the `plugin/` Directory
 ```bash
+cd plugin
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
 ./gomoku_plugin_test
 ```
