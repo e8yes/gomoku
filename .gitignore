@@ -33,6 +33,7 @@
 
 # C++ Build directories and tooling
 build/
+build_plugin/
 bin/
 lib/
 CMakeCache.txt
