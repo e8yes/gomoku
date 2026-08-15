@@ -153,20 +153,85 @@ TEST_F(GameControllerTest, PluginFailureDoesNotLeaveStalePreviousMatchState) {
   EXPECT_TRUE(controller.isGameOver());
   EXPECT_EQ(controller.winnerSeat().toStdString(), "B");
 
-  // 2. Start a new match with an invalid engine plugin
+  // 2. Register a plugin that fails CreatePlayer (returns nullptr)
+  PluginRegistry::Instance().registerLoadedPlugin("FailingTestPlugin", nullptr);
+
   QString captured_error;
   QObject::connect(&controller, &GameController::errorMessage,
                    [&captured_error](const QString& msg) { captured_error = msg; });
 
-  // Simulate plugin error by trying to start engine that fails
-  // Here "engine_plugin_broken" will be treated as missing engine
-  // or test failing engine
-  controller.startMatch("Alice", "BrokenEnginePlugin", 3, 3);
+  // 3. Start a new match with FailingTestPlugin
+  controller.startMatch("Alice", "FailingTestPlugin", 3, 3);
 
-  // Since "BrokenEnginePlugin" is not registered as plugin, it's treated as human.
-  // But if a registered plugin returns nullptr on CreatePlayer:
-  // Let's verify board is reset and winner is empty
-  EXPECT_TRUE(controller.isGameOver() || !controller.isGameOver());
+  // 4. Verify previous match state is completely wiped and no phantom winner exists
+  EXPECT_TRUE(controller.isGameOver());
+  EXPECT_EQ(controller.moveCount(), 0);
+  EXPECT_TRUE(controller.winnerSeat().isEmpty());
+  EXPECT_EQ(controller.terminationReason().toStdString(), "plugin_initialization_failed");
+  EXPECT_FALSE(captured_error.isEmpty());
+  EXPECT_TRUE(captured_error.contains("FailingTestPlugin"));
+
+  // Clean up
+  PluginRegistry::Instance().unregisterPlugin("FailingTestPlugin");
+}
+
+TEST_F(GameControllerTest, StartMatchDiscardsStaleAiActionFromAbortedMatch) {
+  int argc = 0;
+  char* argv[] = {nullptr};
+  QCoreApplication app(argc, argv);
+
+  if (!PluginRegistry::Instance().availableEngines().contains("SampleGomokuEngine")) {
+    GTEST_SKIP() << "SampleGomokuEngine plugin not found in current directory";
+  }
+
+  GameController controller;
+  // 1. Start Match 1: Human vs SampleGomokuEngine
+  controller.startMatch("Alice", "SampleGomokuEngine", 3, 3);
+  controller.submitBoardClick(7, 7);
+  controller.submitBoardClick(7, 8);
+  controller.submitBoardClick(7, 6);
+
+  // AI is now thinking for Seat B in ai_thread_
+  EXPECT_EQ(controller.currentSeat().toStdString(), "B");
+
+  // 2. Immediately start Match 2 (PvP: Alice vs Bob) before Match 1 finishes
+  controller.startMatch("Alice", "Bob", 3, 3);
+
+  // Process all queued Qt events
+  QCoreApplication::processEvents();
+
+  // 3. Verify Match 2 is completely clean and not corrupted by Match 1's AI action
+  EXPECT_FALSE(controller.isGameOver());
+  EXPECT_EQ(controller.moveCount(), 0);
+  EXPECT_EQ(controller.gamePhase().toStdString(), "PLACE_INITIAL_THREE");
+  EXPECT_EQ(controller.currentSeat().toStdString(), "A");
+  EXPECT_TRUE(controller.isHumanTurn());
+
+  // Alice can cleanly make Move 1 of Match 2
+  EXPECT_TRUE(controller.submitBoardClick(7, 7));
+  EXPECT_EQ(controller.moveCount(), 1);
+
+  controller.abortMatch();
+}
+
+TEST_F(GameControllerTest, AbortingInProgressMatchMarksItAsAbortedInDatabase) {
+  int argc = 0;
+  char* argv[] = {nullptr};
+  QCoreApplication app(argc, argv);
+
+  GameController controller;
+  controller.startMatch("Alice", "Bob", 3, 3);
+  controller.submitBoardClick(7, 7);  // 1 move in progress
+
+  // Abort the match mid-game
+  controller.abortMatch();
+
+  // Check SQLite record
+  auto matches = DatabaseManager::Instance().GetRecentMatches(1);
+  ASSERT_EQ(matches.size(), 1);
+  EXPECT_EQ(matches[0].result, "UNDETERMINED");
+  EXPECT_EQ(matches[0].termination_reason, "aborted");
+  EXPECT_EQ(matches[0].total_plies, 1);
 }
 
 TEST_F(GameControllerTest, ReplayControllerPlayback) {

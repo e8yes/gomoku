@@ -144,4 +144,21 @@ std::unique_ptr<gomoku::plugin::IPlayer> PluginRegistry::CreatePlayer(
   return nullptr;
 }
 
+void PluginRegistry::registerLoadedPlugin(
+    const std::string& name,
+    std::shared_ptr<gomoku::plugin::LoadedPlugin> plugin,
+    const std::string& path) {
+  loaded_plugins_[name] = std::move(plugin);
+  if (!path.empty()) {
+    plugin_file_paths_[name] = path;
+  }
+  emit enginesChanged();
+}
+
+void PluginRegistry::unregisterPlugin(const std::string& name) {
+  loaded_plugins_.erase(name);
+  plugin_file_paths_.erase(name);
+  emit enginesChanged();
+}
+
 }  // namespace gomoku::app

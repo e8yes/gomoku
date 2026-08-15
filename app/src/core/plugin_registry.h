@@ -37,6 +37,12 @@ class PluginRegistry : public QObject {
       const std::string& engine_name,
       const std::string& config_json = "{}") const;
 
+  // Dynamic registration helpers (useful for testing)
+  void registerLoadedPlugin(const std::string& name,
+                            std::shared_ptr<gomoku::plugin::LoadedPlugin> plugin,
+                            const std::string& path = "");
+  void unregisterPlugin(const std::string& name);
+
  signals:
   void enginesChanged();
   void pluginLoaded(const QString& name, const QString& path);

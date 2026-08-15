@@ -142,6 +142,7 @@ class GameController : public QObject {
 
   std::thread ai_thread_;
   std::atomic<bool> is_ai_thinking_{false};
+  std::atomic<uint64_t> match_epoch_{0};
   std::chrono::steady_clock::time_point last_move_time_;
 };
 

@@ -155,6 +155,7 @@ void GameController::startMatch(const QString& playerA, const QString& playerB,
   current_ply_count_ = 0;
   opening_path_ = 0;
   is_game_over_ = true;
+  match_epoch_++;
   winner_seat_ = "";
   termination_reason_ = "";
   game_result_ = gomoku::plugin::GameResult::kUndetermined;
@@ -261,17 +262,19 @@ void GameController::TriggerAiTurnIfNeeded() {
     ai_thread_.join();
   }
 
+  const uint64_t epoch = ++match_epoch_;
   is_ai_thinking_ = true;
   emit aiThinkingChanged();
 
-  ai_thread_ = std::thread([this, player]() {
+  ai_thread_ = std::thread([this, player, epoch]() {
     // Perform AI search
     int action_id = player->InquireAction(board_state_);
 
     is_ai_thinking_ = false;
 
     // Dispatch action to Qt main thread
-    QMetaObject::invokeMethod(this, [this, action_id]() {
+    QMetaObject::invokeMethod(this, [this, action_id, epoch]() {
+      if (epoch != match_epoch_) return;  // Action belongs to a cancelled/aborted match
       emit aiThinkingChanged();
       if (!is_game_over_) {
         ProcessMove(action_id);
@@ -397,10 +400,19 @@ void GameController::ConcludeMatch(gomoku::plugin::GameResult result,
                                    const std::string& winner,
                                    const std::string& reason) {
   is_game_over_ = true;
+  match_epoch_++;
   game_result_ = result;
   winner_seat_ = QString::fromStdString(winner);
   termination_reason_ = QString::fromStdString(reason);
 
+  if (player_a_) player_a_->CancelInquiry();
+  if (player_b_) player_b_->CancelInquiry();
+
+  if (ai_thread_.joinable()) {
+    ai_thread_.join();
+  }
+
+  is_ai_thinking_ = false;
   win_rate_timer_.stop();
 
   // Notify players of match conclusion
@@ -422,6 +434,7 @@ void GameController::ConcludeMatch(gomoku::plugin::GameResult result,
   if (db_match_id_ > 0) {
     DatabaseManager::Instance().FinishMatch(
         db_match_id_, res_str, winner, reason, current_ply_count_, opening_path_);
+    db_match_id_ = -1;
   }
 
   // Refresh history model for main screen
@@ -477,12 +490,15 @@ void GameController::resignMatch(const QString& resigningSeat) {
   auto result = (winner == "A") ? gomoku::plugin::GameResult::kPlayerAWin
                                 : gomoku::plugin::GameResult::kPlayerBWin;
 
-  abortMatch();
   ConcludeMatch(result, winner, "resignation");
 }
 
 void GameController::abortMatch() {
+  if (is_game_over_) return;
+
+  const int64_t abandoned_match_id = db_match_id_;
   is_game_over_ = true;
+  match_epoch_++;
 
   if (player_a_) player_a_->CancelInquiry();
   if (player_b_) player_b_->CancelInquiry();
@@ -493,6 +509,13 @@ void GameController::abortMatch() {
 
   is_ai_thinking_ = false;
   win_rate_timer_.stop();
+
+  if (abandoned_match_id > 0) {
+    DatabaseManager::Instance().FinishMatch(
+        abandoned_match_id, "UNDETERMINED", "", "aborted", current_ply_count_, opening_path_);
+    db_match_id_ = -1;
+    match_history_model_.refreshHistory();
+  }
 }
 
 void GameController::OnWinRatePollTimeout() {
