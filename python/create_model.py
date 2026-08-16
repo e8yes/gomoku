@@ -72,7 +72,7 @@ BOARD_SIZE = 15
 NUM_ACTIONS = 230  # must match Board::kNumActions (225 cells + 5 Swap2)
 
 NUM_FILTERS = 128
-NUM_BLOCKS = 7
+NUM_BLOCKS = 5
 SE_RATIO = 4  # SE bottleneck: filters // SE_RATIO channels
 MAX_EXPORT_BATCH_SIZE = 512
 

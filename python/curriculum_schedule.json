@@ -16,7 +16,7 @@
   "train_params": {
     "batch_size": 512,
     "epochs": 1,
-    "lr_seed": 0.01,
+    "lr_seed": 0.005,
     "lr_decay": 0.9
   }
 }
