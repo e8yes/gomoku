@@ -2,6 +2,7 @@ import datetime
 import argparse
 import json
 import logging
+import math
 import os
 import shutil
 import glob
@@ -229,6 +230,21 @@ def adaptive_training_window(
     return base_window + failures_since_promotion
 
 
+def discounted_learning_rate(
+    scheduled_learning_rate: float, base_window: int, selected_shards: int
+) -> float:
+    """Discount LR when failure recovery expands the sampled shard window."""
+    if scheduled_learning_rate <= 0.0:
+        raise ValueError("scheduled_learning_rate must be positive")
+    if base_window <= 0:
+        raise ValueError("base_window must be positive")
+    if selected_shards < 0:
+        raise ValueError("selected_shards must not be negative")
+    if selected_shards <= base_window:
+        return scheduled_learning_rate
+    return scheduled_learning_rate * math.sqrt(base_window / selected_shards)
+
+
 def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
     """
     Executes a single iteration of the AlphaZero training loop.
@@ -313,15 +329,21 @@ def run_iteration(iteration: int, config: CurriculumConfig) -> IterationSummary:
     current_challenger_pth = os.path.join(
         config.model_export_path, f"challenger{iteration:02d}.pth"
     )
-    learning_rate = config.train_params["lr_seed"] * pow(
+    scheduled_learning_rate = config.train_params["lr_seed"] * pow(
         config.train_params["lr_decay"], iteration
+    )
+    learning_rate = discounted_learning_rate(
+        scheduled_learning_rate,
+        config.base_training_window_iterations,
+        training_window,
     )
     logging.info(
         "[*] Training challenger from current champion %s to %s with learning "
-        "rate %s using the newest %d iteration shards",
+        "rate %s (scheduled: %s) using the newest %d iteration shards",
         champion_pth or "<fresh initialization>",
         current_challenger_pth,
         learning_rate,
+        scheduled_learning_rate,
         training_window,
     )
     pi_loss, v_loss = train(

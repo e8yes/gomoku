@@ -1,3 +1,4 @@
+import math
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -7,6 +8,7 @@ from unittest import mock
 from curriculum import (
     CurriculumConfig,
     adaptive_training_window,
+    discounted_learning_rate,
     find_champion_training_weights,
     load_prior_history,
     run_iteration,
@@ -127,6 +129,12 @@ class CurriculumPolicyTest(unittest.TestCase):
                 train_arguments["load_path"], "exported_models/champion07.pth"
             )
             self.assertEqual(train_arguments["iteration_window"], 6)
+            expected_lr = (
+                config.train_params["lr_seed"]
+                * pow(config.train_params["lr_decay"], 10)
+                * math.sqrt(4 / 6)
+            )
+            self.assertAlmostEqual(train_arguments["lr"], expected_lr)
             self.assertIn("exported_models/champion07.pt2", commands[0])
             self.assertEqual(
                 commands[0][
@@ -146,6 +154,37 @@ class CurriculumPolicyTest(unittest.TestCase):
             self.assertEqual(
                 commands[1][commands[1].index("--simulations") + 1], "800"
             )
+
+    def test_discounted_learning_rate_within_base_window(self):
+        self.assertEqual(discounted_learning_rate(0.01, 4, 4), 0.01)
+        self.assertEqual(discounted_learning_rate(0.01, 4, 3), 0.01)
+        self.assertEqual(discounted_learning_rate(0.01, 4, 1), 0.01)
+
+    def test_discounted_learning_rate_scaling_on_window_expansion(self):
+        self.assertAlmostEqual(
+            discounted_learning_rate(0.01, 4, 5), 0.01 * math.sqrt(4 / 5)
+        )
+        self.assertAlmostEqual(
+            discounted_learning_rate(0.01, 4, 6), 0.01 * math.sqrt(4 / 6)
+        )
+        self.assertAlmostEqual(
+            discounted_learning_rate(0.01, 4, 8), 0.01 * math.sqrt(4 / 8)
+        )
+        self.assertAlmostEqual(
+            discounted_learning_rate(0.01, 4, 16), 0.01 * 0.5
+        )
+
+    def test_discounted_learning_rate_validates_inputs(self):
+        with self.assertRaisesRegex(ValueError, "scheduled_learning_rate must be positive"):
+            discounted_learning_rate(0.0, 4, 5)
+        with self.assertRaisesRegex(ValueError, "scheduled_learning_rate must be positive"):
+            discounted_learning_rate(-0.01, 4, 5)
+        with self.assertRaisesRegex(ValueError, "base_window must be positive"):
+            discounted_learning_rate(0.01, 0, 5)
+        with self.assertRaisesRegex(ValueError, "base_window must be positive"):
+            discounted_learning_rate(0.01, -1, 5)
+        with self.assertRaisesRegex(ValueError, "selected_shards must not be negative"):
+            discounted_learning_rate(0.01, 4, -1)
 
     def test_load_prior_history_reconstructs_completed_iterations(self):
         with tempfile.TemporaryDirectory() as temp_dir:
