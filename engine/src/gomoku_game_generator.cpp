@@ -24,6 +24,7 @@
 
 #include "batch_inference_executor.h"
 #include "game_data.h"
+#include "immediate_inference_executor.h"
 #include "neural_net_evaluator.h"
 #include "random_evaluator.h"
 #include "self_play.h"
@@ -119,9 +120,9 @@ int main(int argc, char** argv) {
       LOG(FATAL) << "Unable to open output shard: " << shard_path.string();
     }
 
-    std::shared_ptr<BatchInferenceExecutor> inference_executor;
+    std::shared_ptr<InferenceExecutor> inference_executor;
     std::unique_ptr<NeuralNetEvaluator> neural_evaluator;
-    std::shared_ptr<BatchInferenceExecutor> previous_inference_executor;
+    std::shared_ptr<InferenceExecutor> previous_inference_executor;
     std::unique_ptr<NeuralNetEvaluator> previous_neural_evaluator;
     std::unique_ptr<RandomEvaluator> random_evaluator;
     Evaluator* evaluator = nullptr;
@@ -139,23 +140,34 @@ int main(int argc, char** argv) {
         LOG(FATAL) << "A champion model was supplied, but CUDA is not available";
       }
 
-      inference_executor = std::make_shared<BatchInferenceExecutor>(
-          champion_path, torch::Device(torch::kCUDA), kInferenceBatchRequests,
-          std::chrono::microseconds(kInferenceWaitMicroseconds));
+      if (FLAGS_workers == 1) {
+        inference_executor = std::make_shared<ImmediateInferenceExecutor>(
+            champion_path, torch::Device(torch::kCUDA));
+      } else {
+        inference_executor = std::make_shared<BatchInferenceExecutor>(
+            champion_path, torch::Device(torch::kCUDA), kInferenceBatchRequests,
+            std::chrono::microseconds(kInferenceWaitMicroseconds));
+      }
       neural_evaluator =
           std::make_unique<NeuralNetEvaluator>(std::move(inference_executor));
       evaluator = neural_evaluator.get();
-      LOG(INFO) << "Using champion model: " << champion_path.string();
+      LOG(INFO) << "Using champion model: " << champion_path.string()
+                << (FLAGS_workers == 1 ? " (ImmediateInferenceExecutor)" : " (BatchInferenceExecutor)");
 
       if (!previous_champion_path.empty()) {
         if (!std::filesystem::exists(previous_champion_path)) {
           LOG(FATAL) << "Previous champion model does not exist: "
                      << previous_champion_path.string();
         }
-        previous_inference_executor = std::make_shared<BatchInferenceExecutor>(
-            previous_champion_path, torch::Device(torch::kCUDA),
-            kInferenceBatchRequests,
-            std::chrono::microseconds(kInferenceWaitMicroseconds));
+        if (FLAGS_workers == 1) {
+          previous_inference_executor = std::make_shared<ImmediateInferenceExecutor>(
+              previous_champion_path, torch::Device(torch::kCUDA));
+        } else {
+          previous_inference_executor = std::make_shared<BatchInferenceExecutor>(
+              previous_champion_path, torch::Device(torch::kCUDA),
+              kInferenceBatchRequests,
+              std::chrono::microseconds(kInferenceWaitMicroseconds));
+        }
         previous_neural_evaluator = std::make_unique<NeuralNetEvaluator>(
             std::move(previous_inference_executor));
         LOG(INFO) << "Using previous champion model: "

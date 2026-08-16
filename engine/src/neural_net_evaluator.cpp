@@ -116,7 +116,7 @@ std::vector<EvaluationResult> DecodeOutputs(
 // NeuralNetEvaluator
 // ---------------------------------------------------------------------------
 NeuralNetEvaluator::NeuralNetEvaluator(
-    std::shared_ptr<BatchInferenceExecutor> executor)
+    std::shared_ptr<InferenceExecutor> executor)
     : executor_(std::move(executor)) {}
 
 std::vector<EvaluationResult> NeuralNetEvaluator::Evaluate(

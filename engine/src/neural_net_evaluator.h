@@ -4,9 +4,9 @@
 #include <memory>
 #include <vector>
 
-#include "batch_inference_executor.h"
 #include "board.h"
 #include "evaluator.h"
+#include "inference_executor.h"
 
 namespace neural_net_evaluator_internal {
 // Encodes one board into a [kNumInputChannels, kBoardSize, kBoardSize]
@@ -17,11 +17,11 @@ torch::Tensor BoardToTensor(const Board& board);
 }  // namespace neural_net_evaluator_internal
 
 // NeuralNetEvaluator is the Evaluator adapter that bridges game semantics
-// (Board, EvaluationResult) and the low-level BatchInferenceExecutor.
+// (Board, EvaluationResult) and the low-level InferenceExecutor.
 //
 // Responsibilities:
 //   - Encode a Board into the float32 input tensor expected by the model.
-//   - Submit the tensor to the shared executor and block until evaluated.
+//   - Submit the tensor to the executor and block until evaluated.
 //   - Decode the raw model output (policy logits + value) into an
 //     EvaluationResult, applying illegal-move masking before softmax.
 // Board encoding — 9 feature planes (kNumInputChannels = 9):
@@ -34,14 +34,11 @@ torch::Tensor BoardToTensor(const Board& board);
 //   [6] Constant 1.0 if Phase == kSwap2PlaceTwo, else 0.0
 //   [7] Constant 1.0 if Phase == kChooseColor, else 0.0
 //   [8] Constant 1.0 if Phase == kStandard, else 0.0
-// The executor is shared: one BatchInferenceExecutor can be handed to many
-// NeuralNetEvaluator instances across concurrent game threads so that MCTS
-// leaf evaluations from all games coalesce into the same GPU batches.
 class NeuralNetEvaluator : public Evaluator {
  public:
   static constexpr int kNumInputChannels = 9;
 
-  explicit NeuralNetEvaluator(std::shared_ptr<BatchInferenceExecutor> executor);
+  explicit NeuralNetEvaluator(std::shared_ptr<InferenceExecutor> executor);
 
   // Encodes the board, submits to the executor, runs on_submit_fn if provided
   // while GPU inference runs, blocks until the batch is processed, decodes the
@@ -51,7 +48,8 @@ class NeuralNetEvaluator : public Evaluator {
       const std::function<void()>& on_submit_fn = nullptr) override;
 
  private:
-  std::shared_ptr<BatchInferenceExecutor> executor_;
+  std::shared_ptr<InferenceExecutor> executor_;
 };
+
 
 
