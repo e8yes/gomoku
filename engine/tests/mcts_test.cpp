@@ -102,3 +102,27 @@ TEST(MCTSTest, VirtualLossDiversifiesLeavesWithinAGpuBatch) {
       }));
   EXPECT_EQ(visited_children, 32);
 }
+
+TEST(MCTSTest, EvaluatorSizeMismatchThrowsRuntimeError) {
+  class BrokenEvaluator final : public Evaluator {
+   public:
+    std::vector<EvaluationResult> Evaluate(
+        const std::vector<Board>& boards,
+        const std::function<void()>& on_submit_fn = nullptr) override {
+      if (on_submit_fn) on_submit_fn();
+      // Deliberately return fewer results than requested boards
+      if (boards.size() > 1) {
+        return std::vector<EvaluationResult>(boards.size() - 1);
+      }
+      return std::vector<EvaluationResult>(1);
+    }
+  };
+
+  Board board;
+  BrokenEvaluator evaluator;
+  MCTS mcts(32, 1.0f);
+
+  EXPECT_THROW(mcts.Search(board, &evaluator, SearchStoppingCriteria{32}),
+               std::runtime_error);
+}
+

@@ -47,7 +47,7 @@
 
 #include <nlohmann/json.hpp>
 
-#include "batch_inference_executor.h"
+#include "immediate_inference_executor.h"
 #include "mcts.h"
 #include "neural_net_evaluator.h"
 #include "random_evaluator.h"
@@ -551,7 +551,7 @@ int RunMatchClient(const MatchClientOptions& options) {
         "--admin-token is required when --opponent is supplied");
   }
 
-  std::shared_ptr<BatchInferenceExecutor> inference_executor;
+  std::shared_ptr<ImmediateInferenceExecutor> inference_executor;
   std::unique_ptr<NeuralNetEvaluator> neural_evaluator;
   std::unique_ptr<RandomEvaluator> random_evaluator;
   Evaluator* evaluator = nullptr;
@@ -563,12 +563,12 @@ int RunMatchClient(const MatchClientOptions& options) {
     if (!torch::cuda::is_available()) {
       throw std::runtime_error("CUDA is required when --model is supplied");
     }
-    inference_executor = std::make_shared<BatchInferenceExecutor>(
-        options.model_path, torch::Device(torch::kCUDA), 6,
-        std::chrono::microseconds(500));
+    inference_executor = std::make_shared<ImmediateInferenceExecutor>(
+        options.model_path, torch::Device(torch::kCUDA));
     neural_evaluator = std::make_unique<NeuralNetEvaluator>(inference_executor);
     evaluator = neural_evaluator.get();
-    LOG(INFO) << "using model " << options.model_path.string();
+    LOG(INFO) << "using model " << options.model_path.string()
+              << " (ImmediateInferenceExecutor)";
   } else {
     random_evaluator = std::make_unique<RandomEvaluator>();
     evaluator = random_evaluator.get();

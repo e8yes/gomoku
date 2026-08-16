@@ -24,6 +24,7 @@
 
 #include "batch_inference_executor.h"
 #include "game_data.h"
+#include "immediate_inference_executor.h"
 #include "neural_net_evaluator.h"
 #include "random_evaluator.h"
 #include "self_play.h"
@@ -40,10 +41,10 @@ DEFINE_string(previous_champion_model_path, "",
 DEFINE_double(previous_champion_mix_fraction, 0.0,
               "Fraction of self-play games against previous champion (0.0..1.0)");
 DEFINE_bool(disable_endgame_solver, false, "Disable VCF endgame solver");
+DEFINE_int32(workers, 12, "Number of concurrent worker threads (> 0)");
 
 namespace {
 
-constexpr int kWorkerCount = 12;
 constexpr int kSearchBatchSize = 32;
 constexpr int kInferenceBatchRequests = 6;
 constexpr int kInferenceWaitMicroseconds = 500;
@@ -55,6 +56,9 @@ constexpr int kExplorationPlies = 6;
 void ValidateFlags() {
   if (FLAGS_games <= 0) {
     LOG(FATAL) << "--games must be greater than zero";
+  }
+  if (FLAGS_workers <= 0) {
+    LOG(FATAL) << "--workers must be greater than zero";
   }
   if (FLAGS_simulations <= 0) {
     LOG(FATAL) << "--simulations must be greater than zero";
@@ -116,9 +120,9 @@ int main(int argc, char** argv) {
       LOG(FATAL) << "Unable to open output shard: " << shard_path.string();
     }
 
-    std::shared_ptr<BatchInferenceExecutor> inference_executor;
+    std::shared_ptr<InferenceExecutor> inference_executor;
     std::unique_ptr<NeuralNetEvaluator> neural_evaluator;
-    std::shared_ptr<BatchInferenceExecutor> previous_inference_executor;
+    std::shared_ptr<InferenceExecutor> previous_inference_executor;
     std::unique_ptr<NeuralNetEvaluator> previous_neural_evaluator;
     std::unique_ptr<RandomEvaluator> random_evaluator;
     Evaluator* evaluator = nullptr;
@@ -136,23 +140,34 @@ int main(int argc, char** argv) {
         LOG(FATAL) << "A champion model was supplied, but CUDA is not available";
       }
 
-      inference_executor = std::make_shared<BatchInferenceExecutor>(
-          champion_path, torch::Device(torch::kCUDA), kInferenceBatchRequests,
-          std::chrono::microseconds(kInferenceWaitMicroseconds));
+      if (FLAGS_workers == 1) {
+        inference_executor = std::make_shared<ImmediateInferenceExecutor>(
+            champion_path, torch::Device(torch::kCUDA));
+      } else {
+        inference_executor = std::make_shared<BatchInferenceExecutor>(
+            champion_path, torch::Device(torch::kCUDA), kInferenceBatchRequests,
+            std::chrono::microseconds(kInferenceWaitMicroseconds));
+      }
       neural_evaluator =
           std::make_unique<NeuralNetEvaluator>(std::move(inference_executor));
       evaluator = neural_evaluator.get();
-      LOG(INFO) << "Using champion model: " << champion_path.string();
+      LOG(INFO) << "Using champion model: " << champion_path.string()
+                << (FLAGS_workers == 1 ? " (ImmediateInferenceExecutor)" : " (BatchInferenceExecutor)");
 
       if (!previous_champion_path.empty()) {
         if (!std::filesystem::exists(previous_champion_path)) {
           LOG(FATAL) << "Previous champion model does not exist: "
                      << previous_champion_path.string();
         }
-        previous_inference_executor = std::make_shared<BatchInferenceExecutor>(
-            previous_champion_path, torch::Device(torch::kCUDA),
-            kInferenceBatchRequests,
-            std::chrono::microseconds(kInferenceWaitMicroseconds));
+        if (FLAGS_workers == 1) {
+          previous_inference_executor = std::make_shared<ImmediateInferenceExecutor>(
+              previous_champion_path, torch::Device(torch::kCUDA));
+        } else {
+          previous_inference_executor = std::make_shared<BatchInferenceExecutor>(
+              previous_champion_path, torch::Device(torch::kCUDA),
+              kInferenceBatchRequests,
+              std::chrono::microseconds(kInferenceWaitMicroseconds));
+        }
         previous_neural_evaluator = std::make_unique<NeuralNetEvaluator>(
             std::move(previous_inference_executor));
         LOG(INFO) << "Using previous champion model: "
@@ -168,8 +183,9 @@ int main(int argc, char** argv) {
     const int keep_last_moves = 0;
     const int mixed_game_count = static_cast<int>(std::llround(
         FLAGS_previous_champion_mix_fraction * FLAGS_games));
+    const int worker_count = std::min(FLAGS_workers, FLAGS_games);
     LOG(INFO) << "Generating " << FLAGS_games << " games with "
-              << kWorkerCount << " workers, " << FLAGS_simulations
+              << worker_count << " workers, " << FLAGS_simulations
               << " simulations/move, root noise and stochastic actions for "
               << "the first " << kExplorationPlies
               << " decision plies, then argmax action selection with "
@@ -269,7 +285,6 @@ int main(int argc, char** argv) {
       }
     };
 
-    const int worker_count = std::min(kWorkerCount, FLAGS_games);
     std::vector<std::thread> workers;
     workers.reserve(worker_count);
     for (int i = 0; i < worker_count; ++i) workers.emplace_back(worker);

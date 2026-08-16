@@ -13,7 +13,9 @@ namespace {
 class CountingEvaluator final : public Evaluator {
  public:
   std::vector<EvaluationResult> Evaluate(
-      const std::vector<Board>& boards) override {
+      const std::vector<Board>& boards,
+      const std::function<void()>& on_submit_fn = nullptr) override {
+    if (on_submit_fn) on_submit_fn();
     ++calls;
     evaluated_boards += boards.size();
 
@@ -195,7 +197,7 @@ TEST(MCTSEndgameSolverTest, SolvedLeafOverridesPolicyAndValue) {
   mcts.Search(board, &evaluator, SearchStoppingCriteria{1}, solver);
 
   EXPECT_GE(solver_calls, 2);
-  EXPECT_EQ(evaluator.calls, 1);  // Root only; the leaf was solved.
+  EXPECT_EQ(evaluator.calls, 2);  // Root and leaf batch submitted concurrently.
   ASSERT_NE(mcts.root(), nullptr);
 
   const MCTSNode* expanded_child = nullptr;

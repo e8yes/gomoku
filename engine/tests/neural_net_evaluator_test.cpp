@@ -3,6 +3,9 @@
 #include <gtest/gtest.h>
 #include <torch/torch.h>
 
+#include "batch_inference_executor.h"
+#include "immediate_inference_executor.h"
+
 // ---------------------------------------------------------------------------
 // Helper: fast-forward to standard phase so stone_to_place() is meaningful.
 // After kSwap2ChooseBlack: A=White, B=Black, next to move is A (White).
@@ -119,3 +122,50 @@ TEST(NeuralNetEvaluatorTest, EndToEndWithRealModel) {
   EXPECT_GE(r.value, -1.0f);
   EXPECT_LE(r.value, 1.0f);
 }
+
+TEST(NeuralNetEvaluatorTest, ImmediateInferenceExecutorEndToEnd) {
+  const std::filesystem::path model_path = "model.pt2";
+  if (!std::filesystem::exists(model_path)) {
+    GTEST_SKIP()
+        << "model.pt2 not found; run: cd python && python create_model.py";
+  }
+
+  torch::Device device =
+      torch::cuda::is_available() ? torch::kCUDA : torch::kCPU;
+  auto exec = std::make_shared<ImmediateInferenceExecutor>(model_path, device);
+  NeuralNetEvaluator evaluator(exec);
+
+  Board b = MakeStandardBoard();
+  EvaluationResult r = evaluator.Evaluate({b})[0];
+
+  ASSERT_EQ(static_cast<int>(r.move_pmf.size()), Board::kNumActions);
+  float sum = 0.0f;
+  for (float p : r.move_pmf) {
+    EXPECT_GE(p, 0.0f);
+    sum += p;
+  }
+  EXPECT_NEAR(sum, 1.0f, 1e-4f);
+  EXPECT_GE(r.value, -1.0f);
+  EXPECT_LE(r.value, 1.0f);
+}
+
+TEST(NeuralNetEvaluatorTest, ImmediateInferenceExecutorCapturesExceptionInFuture) {
+  const std::filesystem::path model_path = "model.pt2";
+  if (!std::filesystem::exists(model_path)) {
+    GTEST_SKIP()
+        << "model.pt2 not found; run: cd python && python create_model.py";
+  }
+
+  torch::Device device =
+      torch::cuda::is_available() ? torch::kCUDA : torch::kCPU;
+  ImmediateInferenceExecutor exec(model_path, device);
+
+  // Submit an invalid tensor shape (e.g. 1D tensor [10])
+  auto invalid_tensor = torch::zeros({10}, torch::kFloat32);
+  auto future = exec.Submit(invalid_tensor);
+
+  // Submit must not throw directly; error must be stored in future and surfaced on .get()
+  EXPECT_THROW(future.get(), std::exception);
+}
+
+

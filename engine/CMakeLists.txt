@@ -35,6 +35,7 @@ set(ENGINE_SOURCES
   src/random_evaluator.cpp
   src/mcts.cpp
   src/batch_inference_executor.cpp
+  src/immediate_inference_executor.cpp
   src/neural_net_evaluator.cpp
   src/vcf_solver.cpp
   src/game_data.cpp

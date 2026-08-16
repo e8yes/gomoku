@@ -1,6 +1,12 @@
 #include "random_evaluator.h"
 
-std::vector<EvaluationResult> RandomEvaluator::Evaluate(const std::vector<Board>& boards) {
+std::vector<EvaluationResult> RandomEvaluator::Evaluate(
+    const std::vector<Board>& boards,
+    const std::function<void()>& on_submit_fn) {
+  if (on_submit_fn) {
+    on_submit_fn();
+  }
+
   std::vector<EvaluationResult> results;
   results.reserve(boards.size());
 
@@ -15,13 +21,15 @@ std::vector<EvaluationResult> RandomEvaluator::Evaluate(const std::vector<Board>
       continue;
     }
 
-    float prob = 1.0f / legal_actions.size();
+    float prob = 1.0f / static_cast<float>(legal_actions.size());
     for (int action : legal_actions) {
       res.move_pmf[action] = prob;
     }
-    
+
     results.push_back(res);
   }
 
   return results;
 }
+
+

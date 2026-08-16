@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "batched_blocking_queue.h"
+#include "inference_executor.h"
 
 // BatchInferenceExecutor manages GPU batched inference for an AOTInductor
 // model package. AOTInductor compiles the exported model to optimized
@@ -23,12 +24,8 @@
 //
 // The shared_ptr<BatchInferenceExecutor> pattern allows one executor to serve
 // many NeuralNetEvaluator instances across multiple concurrent game threads.
-class BatchInferenceExecutor {
+class BatchInferenceExecutor : public InferenceExecutor {
  public:
-  // Two CPU tensors from the model output, representing the batched results
-  // (policy and value) for the submitted small-batch.
-  using Output = std::pair<torch::Tensor, torch::Tensor>;
-
   // Loads the AOTInductor .pt2 package and starts the inference thread.
   // max_requests defines the maximum number of small-batch requests to
   // accumulate per inference pass.
@@ -36,14 +33,14 @@ class BatchInferenceExecutor {
                          torch::Device device, int max_requests,
                          std::chrono::microseconds max_wait_us);
 
-  ~BatchInferenceExecutor();
+  ~BatchInferenceExecutor() override;
 
   BatchInferenceExecutor(const BatchInferenceExecutor&) = delete;
   BatchInferenceExecutor& operator=(const BatchInferenceExecutor&) = delete;
 
   // Thread-safe. Enqueues a pre-encoded CPU tensor and returns a future that
   // resolves to the model's output for that input, on CPU.
-  std::future<Output> Submit(torch::Tensor input);
+  std::future<Output> Submit(torch::Tensor input) override;
 
  private:
   struct Request {
