@@ -43,10 +43,15 @@ class NeuralNetEvaluator : public Evaluator {
 
   explicit NeuralNetEvaluator(std::shared_ptr<BatchInferenceExecutor> executor);
 
-  // Encodes the board, submits to the executor, blocks until the batch is
-  // processed, decodes the result, and returns an EvaluationResult.
-  std::vector<EvaluationResult> Evaluate(const std::vector<Board>& boards) override;
+  // Encodes the board, submits to the executor, runs on_submit_fn if provided
+  // while GPU inference runs, blocks until the batch is processed, decodes the
+  // result, and returns EvaluationResults.
+  std::vector<EvaluationResult> Evaluate(
+      const std::vector<Board>& boards,
+      const std::function<void()>& on_submit_fn = nullptr) override;
 
  private:
   std::shared_ptr<BatchInferenceExecutor> executor_;
 };
+
+

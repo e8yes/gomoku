@@ -60,35 +60,13 @@ torch::Tensor BoardToTensor(const Board& board) {
 
 }  // namespace neural_net_evaluator_internal
 
-// ---------------------------------------------------------------------------
-// NeuralNetEvaluator
-// ---------------------------------------------------------------------------
-NeuralNetEvaluator::NeuralNetEvaluator(
-    std::shared_ptr<BatchInferenceExecutor> executor)
-    : executor_(std::move(executor)) {}
+namespace {
 
-std::vector<EvaluationResult> NeuralNetEvaluator::Evaluate(
-    const std::vector<Board>& boards) {
-  if (boards.empty()) return {};
-
+std::vector<EvaluationResult> DecodeOutputs(
+    const std::vector<Board>& boards,
+    const torch::Tensor& policy_logits,
+    const torch::Tensor& values) {
   const int batch_size = static_cast<int>(boards.size());
-  constexpr int kFloatsPerBoard =
-      NeuralNetEvaluator::kNumInputChannels * Board::kNumCells;
-
-  auto batched_input = torch::empty(
-      {batch_size, NeuralNetEvaluator::kNumInputChannels, Board::kSize,
-       Board::kSize},
-      torch::kFloat32);
-  float* input_ptr = batched_input.data_ptr<float>();
-
-  for (int i = 0; i < batch_size; ++i) {
-    neural_net_evaluator_internal::EncodeBoard(
-        boards[i], input_ptr + i * kFloatsPerBoard);
-  }
-
-  auto future = executor_->Submit(std::move(batched_input));
-  auto [policy_logits, values] = future.get();  // [batch_size, A], [batch_size, 1]
-
   const float* logits_ptr = policy_logits.data_ptr<float>();
   const float* values_ptr = values.data_ptr<float>();
 
@@ -131,4 +109,46 @@ std::vector<EvaluationResult> NeuralNetEvaluator::Evaluate(
 
   return results;
 }
+
+}  // namespace
+
+// ---------------------------------------------------------------------------
+// NeuralNetEvaluator
+// ---------------------------------------------------------------------------
+NeuralNetEvaluator::NeuralNetEvaluator(
+    std::shared_ptr<BatchInferenceExecutor> executor)
+    : executor_(std::move(executor)) {}
+
+std::vector<EvaluationResult> NeuralNetEvaluator::Evaluate(
+    const std::vector<Board>& boards,
+    const std::function<void()>& on_submit_fn) {
+  if (boards.empty()) return {};
+
+  const int batch_size = static_cast<int>(boards.size());
+  constexpr int kFloatsPerBoard =
+      NeuralNetEvaluator::kNumInputChannels * Board::kNumCells;
+
+  auto batched_input = torch::empty(
+      {batch_size, NeuralNetEvaluator::kNumInputChannels, Board::kSize,
+       Board::kSize},
+      torch::kFloat32);
+  float* input_ptr = batched_input.data_ptr<float>();
+
+  for (int i = 0; i < batch_size; ++i) {
+    neural_net_evaluator_internal::EncodeBoard(
+        boards[i], input_ptr + i * kFloatsPerBoard);
+  }
+
+  auto future = executor_->Submit(std::move(batched_input));
+
+  if (on_submit_fn) {
+    on_submit_fn();
+  }
+
+  auto [policy_logits, values] = future.get();
+
+  return DecodeOutputs(boards, policy_logits, values);
+}
+
+
 

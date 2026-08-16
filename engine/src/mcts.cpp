@@ -413,27 +413,30 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator,
       }
 
       if (!missed_leaf_boards.empty()) {
-        // Let the endgame solver override evaluator results when it proves a
-        // win. Unsolved leaves are sent to the evaluator in one batch.
-        std::vector<Board> evaluator_boards;
-        evaluator_boards.reserve(missed_leaf_boards.size());
-
-        for (const Board& board : missed_leaf_boards) {
-          const int solved_action = GetSolvedAction(board, endgame_solver);
-          if (solved_action >= 0) {
-            evaluation_cache_[board.signature()] =
-                MakeSolvedEvaluation(solved_action);
-          } else {
-            evaluator_boards.push_back(board);
+        std::vector<int> solved_actions(missed_leaf_boards.size(), -1);
+        auto side_work_fn = [&]() {
+          if (endgame_solver) {
+            for (size_t i = 0; i < missed_leaf_boards.size(); ++i) {
+              solved_actions[i] =
+                  GetSolvedAction(missed_leaf_boards[i], endgame_solver);
+            }
           }
-        }
+        };
 
-        if (!evaluator_boards.empty()) {
-          std::vector<EvaluationResult> eval_results =
-              evaluator->Evaluate(evaluator_boards);
-          for (size_t i = 0; i < eval_results.size(); ++i) {
-            evaluation_cache_[evaluator_boards[i].signature()] =
-                eval_results[i];
+        // Submit un-cached leaves to the evaluator, executing VCF side work
+        // on this thread while GPU inference is in flight.
+        std::vector<EvaluationResult> eval_results =
+            evaluator->Evaluate(missed_leaf_boards, side_work_fn);
+
+        // Populate evaluation cache, using VCF solved actions to override
+        // neural net results.
+        for (size_t i = 0; i < missed_leaf_boards.size(); ++i) {
+          if (solved_actions[i] >= 0) {
+            evaluation_cache_[missed_leaf_boards[i].signature()] =
+                MakeSolvedEvaluation(solved_actions[i]);
+          } else {
+            evaluation_cache_[missed_leaf_boards[i].signature()] =
+                std::move(eval_results[i]);
           }
         }
 

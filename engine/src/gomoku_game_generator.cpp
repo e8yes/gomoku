@@ -40,10 +40,10 @@ DEFINE_string(previous_champion_model_path, "",
 DEFINE_double(previous_champion_mix_fraction, 0.0,
               "Fraction of self-play games against previous champion (0.0..1.0)");
 DEFINE_bool(disable_endgame_solver, false, "Disable VCF endgame solver");
+DEFINE_int32(workers, 12, "Number of concurrent worker threads (> 0)");
 
 namespace {
 
-constexpr int kWorkerCount = 12;
 constexpr int kSearchBatchSize = 32;
 constexpr int kInferenceBatchRequests = 6;
 constexpr int kInferenceWaitMicroseconds = 500;
@@ -55,6 +55,9 @@ constexpr int kExplorationPlies = 6;
 void ValidateFlags() {
   if (FLAGS_games <= 0) {
     LOG(FATAL) << "--games must be greater than zero";
+  }
+  if (FLAGS_workers <= 0) {
+    LOG(FATAL) << "--workers must be greater than zero";
   }
   if (FLAGS_simulations <= 0) {
     LOG(FATAL) << "--simulations must be greater than zero";
@@ -168,8 +171,9 @@ int main(int argc, char** argv) {
     const int keep_last_moves = 0;
     const int mixed_game_count = static_cast<int>(std::llround(
         FLAGS_previous_champion_mix_fraction * FLAGS_games));
+    const int worker_count = std::min(FLAGS_workers, FLAGS_games);
     LOG(INFO) << "Generating " << FLAGS_games << " games with "
-              << kWorkerCount << " workers, " << FLAGS_simulations
+              << worker_count << " workers, " << FLAGS_simulations
               << " simulations/move, root noise and stochastic actions for "
               << "the first " << kExplorationPlies
               << " decision plies, then argmax action selection with "
@@ -269,7 +273,6 @@ int main(int argc, char** argv) {
       }
     };
 
-    const int worker_count = std::min(kWorkerCount, FLAGS_games);
     std::vector<std::thread> workers;
     workers.reserve(worker_count);
     for (int i = 0; i < worker_count; ++i) workers.emplace_back(worker);

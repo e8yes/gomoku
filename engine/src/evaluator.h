@@ -1,4 +1,5 @@
 #pragma once
+#include <functional>
 #include <vector>
 
 #include "board.h"
@@ -12,5 +13,10 @@ struct EvaluationResult {
 class Evaluator {
  public:
   virtual ~Evaluator() = default;
-  virtual std::vector<EvaluationResult> Evaluate(const std::vector<Board>& boards) = 0;
+
+  virtual std::vector<EvaluationResult> Evaluate(
+      const std::vector<Board>& boards,
+      const std::function<void()>& on_submit_fn = nullptr) = 0;
 };
+
+

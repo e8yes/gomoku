@@ -13,7 +13,9 @@ namespace {
 class UniformEvaluator final : public Evaluator {
  public:
   std::vector<EvaluationResult> Evaluate(
-      const std::vector<Board>& boards) override {
+      const std::vector<Board>& boards,
+      const std::function<void()>& on_submit_fn = nullptr) override {
+    if (on_submit_fn) on_submit_fn();
     ++calls;
 
     std::vector<EvaluationResult> results;

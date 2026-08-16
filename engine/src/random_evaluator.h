@@ -1,4 +1,7 @@
 #pragma once
+#include <functional>
+#include <vector>
+
 #include "evaluator.h"
 
 // Uniform policy/value fallback used for bootstrapping. Endgame solving is
@@ -8,5 +11,8 @@
 class RandomEvaluator : public Evaluator {
  public:
   std::vector<EvaluationResult> Evaluate(
-      const std::vector<Board>& boards) override;
+      const std::vector<Board>& boards,
+      const std::function<void()>& on_submit_fn = nullptr) override;
 };
+
+
