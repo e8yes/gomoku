@@ -149,3 +149,23 @@ TEST(NeuralNetEvaluatorTest, ImmediateInferenceExecutorEndToEnd) {
   EXPECT_LE(r.value, 1.0f);
 }
 
+TEST(NeuralNetEvaluatorTest, ImmediateInferenceExecutorCapturesExceptionInFuture) {
+  const std::filesystem::path model_path = "model.pt2";
+  if (!std::filesystem::exists(model_path)) {
+    GTEST_SKIP()
+        << "model.pt2 not found; run: cd python && python create_model.py";
+  }
+
+  torch::Device device =
+      torch::cuda::is_available() ? torch::kCUDA : torch::kCPU;
+  ImmediateInferenceExecutor exec(model_path, device);
+
+  // Submit an invalid tensor shape (e.g. 1D tensor [10])
+  auto invalid_tensor = torch::zeros({10}, torch::kFloat32);
+  auto future = exec.Submit(invalid_tensor);
+
+  // Submit must not throw directly; error must be stored in future and surfaced on .get()
+  EXPECT_THROW(future.get(), std::exception);
+}
+
+

@@ -17,19 +17,23 @@ ImmediateInferenceExecutor::ImmediateInferenceExecutor(
 
 std::future<InferenceExecutor::Output> ImmediateInferenceExecutor::Submit(
     torch::Tensor input) {
-  // Move CPU float32 tensor to GPU device in FP16 format for tensor core execution.
-  torch::Tensor batch = input.to(device_).to(torch::kFloat16);
-
-  auto outputs = model_->run({batch});
-  if (outputs.size() != 2) {
-    throw std::runtime_error(
-        "AOTInductor model must return exactly policy and value tensors");
-  }
-
-  torch::Tensor policy = outputs[0].to(torch::kFloat32).cpu();
-  torch::Tensor values = outputs[1].to(torch::kFloat32).cpu();
-
   std::promise<Output> promise;
-  promise.set_value({std::move(policy), std::move(values)});
+  try {
+    // Move CPU float32 tensor to GPU device in FP16 format for tensor core execution.
+    torch::Tensor batch = input.to(device_).to(torch::kFloat16);
+
+    auto outputs = model_->run({batch});
+    if (outputs.size() != 2) {
+      throw std::runtime_error(
+          "AOTInductor model must return exactly policy and value tensors");
+    }
+
+    torch::Tensor policy = outputs[0].to(torch::kFloat32).cpu();
+    torch::Tensor values = outputs[1].to(torch::kFloat32).cpu();
+
+    promise.set_value({std::move(policy), std::move(values)});
+  } catch (...) {
+    promise.set_exception(std::current_exception());
+  }
   return promise.get_future();
 }

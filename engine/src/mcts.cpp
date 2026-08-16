@@ -297,6 +297,9 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator,
   // Evaluate root if not expanded
   if (!root_->is_expanded()) {
     auto res = evaluator->Evaluate({root_board});
+    if (res.empty()) {
+      throw std::runtime_error("Evaluator returned empty result for root board");
+    }
     if (defensive_solver) {
       const EndgameDefenseAnalysis analysis = defensive_solver(root_board);
       MaskPolicyToSafeActions(root_board, analysis, &res[0].move_pmf);
@@ -427,6 +430,12 @@ std::vector<float> MCTS::Search(const Board& root_board, Evaluator* evaluator,
         // on this thread while GPU inference is in flight.
         std::vector<EvaluationResult> eval_results =
             evaluator->Evaluate(missed_leaf_boards, side_work_fn);
+        if (eval_results.size() != missed_leaf_boards.size()) {
+          throw std::runtime_error(
+              "Evaluator returned " + std::to_string(eval_results.size()) +
+              " results for " + std::to_string(missed_leaf_boards.size()) +
+              " candidate boards");
+        }
 
         // Populate evaluation cache, using VCF solved actions to override
         // neural net results.
